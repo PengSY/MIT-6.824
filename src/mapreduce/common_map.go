@@ -2,6 +2,11 @@ package mapreduce
 
 import (
 	"hash/fnv"
+	"os"
+	"encoding/json"
+	"fmt"
+	"time"
+	"io/ioutil"
 )
 
 // doMap manages one map task: it reads one of the input files
@@ -53,6 +58,51 @@ func doMap(
 	//
 	// Remember to close the file after you have written all the values!
 	//
+
+	//create a log file for doMap
+	logFile, err := os.Create("doMapLog")
+	timestamp := time.Now().Unix()
+	tm := time.Unix(timestamp, 0)
+	logFile.WriteString(fmt.Sprintln(tm.Format("2006-01-02 03:04:05 PM")))
+
+	//create nReduce files to store intermediate key-value
+	interFile := make([]*os.File, nReduce)
+	encoders := make([]*json.Encoder, nReduce)
+	for i := 0; i < nReduce; i = i + 1 {
+		fileName := reduceName(jobName, mapTaskNumber, i)
+		interFile[i], err = os.Create(fileName)
+		encoders[i] = json.NewEncoder(interFile[i])
+		if err != nil {
+			logFile.WriteString(fmt.Sprintln(err))
+			return
+		}
+	}
+
+	//read input file
+	var content []byte
+	content, err = ioutil.ReadFile(inFile)
+	constr := string(content)
+
+	//store intermediate key-value to on disk
+	interkv := mapF("", constr)
+	for _, kv := range interkv {
+		r := ihash(kv.Key) % nReduce
+		err = encoders[r].Encode(&kv)
+		if err != nil {
+			logFile.WriteString(fmt.Sprintln(err))
+			return
+		}
+	}
+
+	//close file
+	for i := 0; i < nReduce; i = i + 1 {
+		err = interFile[i].Close()
+		if err != nil {
+			logFile.WriteString(fmt.Sprintln(err))
+			return
+		}
+	}
+	logFile.Close()
 }
 
 func ihash(s string) int {
