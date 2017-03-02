@@ -1,12 +1,12 @@
 package mapreduce
 
 import (
-	"hash/fnv"
-	"os"
 	"encoding/json"
 	"fmt"
-	"time"
+	"hash/fnv"
 	"io/ioutil"
+	"os"
+	"time"
 )
 
 // doMap manages one map task: it reads one of the input files
@@ -84,7 +84,7 @@ func doMap(
 	constr := string(content)
 
 	//store intermediate key-value to on disk
-	interkv := mapF("", constr)
+	interkv := mapF(inFile, constr)
 	for _, kv := range interkv {
 		r := ihash(kv.Key) % nReduce
 		err = encoders[r].Encode(&kv)

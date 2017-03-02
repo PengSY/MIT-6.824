@@ -1,26 +1,26 @@
 package mapreduce
 
-import(
-	"os"
-	"time"
-	"fmt"
+import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"sort"
+	"time"
 )
 
 type KeyValueList []KeyValue
 
 //create Len,Swap,Less function for KeyValue type
-func(kv KeyValueList) Len() int{
+func (kv KeyValueList) Len() int {
 	return len(kv)
 }
 
-func(kv KeyValueList) Swap(i,j int){
-	kv[i],kv[j]=kv[j],kv[i]
+func (kv KeyValueList) Swap(i, j int) {
+	kv[i], kv[j] = kv[j], kv[i]
 }
 
-func(kv KeyValueList) Less(i,j int) bool{
-	return kv[i].Key<kv[j].Key
+func (kv KeyValueList) Less(i, j int) bool {
+	return kv[i].Key < kv[j].Key
 }
 
 // doReduce manages one reduce task: it reads the intermediate
@@ -110,7 +110,7 @@ func doReduce(
 	var valueGroup []string
 	for i := 0; i < len(kvlist); i = i + 1 {
 		valueGroup = append(valueGroup, kvlist[i].Value)
-		if i == len(kvlist) - 1 || kvlist[i + 1].Key != kvlist[i].Key {
+		if i == len(kvlist)-1 || kvlist[i+1].Key != kvlist[i].Key {
 			kvmap[kvlist[i].Key] = valueGroup
 			valueGroup = make([]string, 0)
 		}
