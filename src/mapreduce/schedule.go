@@ -14,6 +14,12 @@ import (
 // suitable for passing to call(). registerChan will yield all
 // existing registered workers (if any) and new ones as they register.
 //
+
+type TaskResult struct{
+	workerAddr string
+	isFail bool
+}
+
 func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, registerChan chan string) {
 	var ntasks int
 	var n_other int // number of inputs (for reduce) or outputs (for map)
@@ -50,7 +56,7 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//workers and tasks it is doing
 	wtmap := make(map[string]int)
 	//workers return its rpc address through channel if success
-	rschan := make(chan string)
+	rschan := make(chan TaskResult)
 	//idle worker list
 	idleWorker := make([]string, 0)
 	//signal there is idleWorker through channel
@@ -66,12 +72,16 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 			case workerAddr := <-registerChan:
 				idleWorker = append(idleWorker, workerAddr)
 				totalWorker = totalWorker + 1
-				fmt.Println("registerChan")
 			//if a worker finished its task
-			case workerAddr := <-rschan:
+			case rs := <-rschan:
+				workerAddr := rs.workerAddr
+				isFail := rs.isFail
+				if isFail {
+					taskNumber := wtmap[workerAddr]
+					undoList = append(undoList, taskNumber)
+				}
 				idleWorker = append(idleWorker, workerAddr)
 				delete(wtmap, workerAddr)
-				fmt.Println("rschan")
 			default:
 				if len(undoList) == 0 {
 					if len(idleWorker) == totalWorker {
@@ -93,9 +103,10 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 							args.File = mapFiles[args.TaskNumber]
 						}
 						go func(srv string, rpcname string, args interface{}, reply interface{}) {
-							call(srv, rpcname, args, reply)
-							fmt.Println("after call")
-							rschan <- srv
+							var trs TaskResult
+							trs.isFail=!call(srv, rpcname, args, reply)
+							trs.workerAddr=srv
+							rschan <- trs
 						}(workerAddr, "Worker.DoTask", args, nil)
 					}
 				}
