@@ -1,2 +1,2 @@
 # 6.824Lab1
-Lab1 of MIT6.824
+Lab of MIT6.824
