@@ -381,7 +381,7 @@ func ResetTimer(timer *time.Timer){
 	case <-timer.C:
 	default:
 	}
-	timer.Reset(time.Duration((rand.Float64()+2)*secondtonano))
+	timer.Reset(time.Duration((rand.Float64()+1.5)*secondtonano))
 }
 
 //
@@ -876,7 +876,7 @@ func (rf *Raft) ElectionRoutine(){
 	var voteCount int
 
 	rf.mu.Lock()
-	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+2)*secondtonano))
+	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+1.5)*secondtonano))
 	rf.mu.Unlock()
 
 	for{
