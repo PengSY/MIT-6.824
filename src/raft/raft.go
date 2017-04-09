@@ -136,11 +136,12 @@ type Raft struct {
 
 	isDead bool
 
+	/*
 	replyIndexCh chan int
 	replyArray []AppendEntriesReply
 	newMatchIdx int
 	successNum int
-
+	*/
 }
 
 // return currentTerm and whether this server
@@ -219,11 +220,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if  rf.votedFor>=0 || args.Term < rf.currentTerm || args.LastLogTerm<lastLogTerm || (args.LastLogTerm==lastLogTerm && args.LastLogIndex<lastLogIndex){
+		rf.PrintLog(fmt.Sprintf("I did not vote for s%d",args.CandidateId))
 		reply.VoteGranted = false
 		rf.mu.Unlock()
 		return
 	}
-	//rf.PrintLog(fmt.Sprintf("I vote for s%d, votedFor before=%d",args.CandidateId,rf.votedFor))
+	rf.PrintLog(fmt.Sprintf("I vote for s%d",args.CandidateId))
 	ResetTimer(rf.electionTimer)
 	reply.VoteGranted=true
 	rf.votedFor=args.CandidateId
@@ -416,8 +418,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.log=append(rf.log,e)
 		index=len(rf.log)
 		rf.PrintLog(fmt.Sprintf("(leader) append log entry(term=%d,index=%d,command=%d)",term,index,command))
-
-		rf.BroadcastAppendEntriesRPC()
+		//rf.BroadcastAppendEntriesRPC()
 	}
 	rf.mu.Unlock()
 
@@ -466,7 +467,7 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 			continue
 		}
 		go func(index int){
-			//rf.PrintLog(fmt.Sprintf("send RequestVote RPC to s%d",index))
+			rf.PrintLog(fmt.Sprintf("send RequestVote RPC to s%d",index))
 			res:=rf.sendRequestVote(index,&args,&replyArray[index])
 			if res{
 				replyIndexCh<-index
@@ -538,21 +539,28 @@ func(rf *Raft) BroadcastHeartbeat(routineTerm int)(chan int,[]AppendEntriesReply
 }
 */
 
-func (rf *Raft) BroadcastAppendEntriesRPC()(){
-	//var replyIndexCh chan int
-	//var replyArray []AppendEntriesReply
-	//var newMatchIdx int
+func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntriesReply,int,bool){
+	var replyIndexCh chan int
+	var replyArray []AppendEntriesReply
+	var newMatchIdx int
 
-	rf.replyIndexCh=make(chan int,len(rf.peers)-1)
-	rf.replyArray=make([]AppendEntriesReply,len(rf.peers))
-	rf.newMatchIdx=len(rf.log)
+	rf.mu.Lock()
+
+	if rf.currentTerm != routineTerm || rf.isDead {
+		rf.mu.Unlock()
+		return replyIndexCh,replyArray,newMatchIdx,true
+	}
+
+	replyIndexCh=make(chan int,len(rf.peers)-1)
+	replyArray=make([]AppendEntriesReply,len(rf.peers))
+	newMatchIdx=len(rf.log)
 	leaderId:=rf.leaderId
 	log:=rf.log
 	currentTerm:=rf.currentTerm
 	commitIndex:=rf.commitIndex
 	peerNum:=len(rf.peers)
-	rf.successNum=1
 
+	rf.mu.Unlock()
 
 	for i:=0;i<peerNum;i++{
 		if i==leaderId{
@@ -577,8 +585,8 @@ func (rf *Raft) BroadcastAppendEntriesRPC()(){
 		if args.PrevLogIndex>0{
 			args.PrevLogTerm=log[args.PrevLogIndex-1].Term
 		}
-		if len(log)>0 && nextIndex<=rf.newMatchIdx{
-			args.Entries=log[nextIndex-1:rf.newMatchIdx]
+		if len(log)>0 && nextIndex<=newMatchIdx{
+			args.Entries=log[nextIndex-1:newMatchIdx]
 		}
 
 		go func(index int,args AppendEntriesArgs) {
@@ -589,24 +597,24 @@ func (rf *Raft) BroadcastAppendEntriesRPC()(){
 					index, nextIndex, len(log), args.PrevLogIndex))
 			}
 
-			res := rf.sendAppendEntries(index, &args, &rf.replyArray[index])
+			res := rf.sendAppendEntries(index, &args, &replyArray[index])
 			if res {
-				rf.replyIndexCh <- index
+				replyIndexCh <- index
 			} else {
-				rf.replyIndexCh <- -1
+				replyIndexCh <- -1
 			}
 		}(i,args)
 	}
 
-	return
+	return replyIndexCh,replyArray,newMatchIdx,false
 }
 
-func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int){
+func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int)(bool){
 	rf.mu.Lock()
 
 	if rf.role!=CANDIDATE{
 		rf.mu.Unlock()
-		return
+		return false
 	}
 
 	term:=reply.Term
@@ -614,6 +622,12 @@ func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int){
 
 	if voteGranted{
 		(*voteCount)++
+		rf.PrintLog("receive vote")
+		if *voteCount > len(rf.peers) / 2 {
+			rf.SwitchToLeader()
+			rf.mu.Unlock()
+			return true
+		}
 	}else if term>rf.currentTerm{
 		rf.currentTerm=term
 		rf.votedFor=-1
@@ -621,6 +635,7 @@ func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int){
 	}
 
 	rf.mu.Unlock()
+	return false
 }
 
 /*
@@ -643,14 +658,21 @@ func (rf *Raft) HandleHeartbeatReply(reply AppendEntriesReply,routineTerm int){
 }
 */
 
-func (rf *Raft) HandleAppendEntriesReply(peerIdx int){
-	reply:=rf.replyArray[peerIdx]
+func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,newMatchIdx int,successNum *int,routineTerm int)(bool){
+	rf.mu.Lock()
+
+	if rf.currentTerm != routineTerm || rf.isDead {
+		rf.mu.Unlock()
+		return true
+	}
+
 	if !reply.Success && reply.Term > rf.currentTerm {
 		rf.role = FOLLOWER
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
 		go rf.ElectionRoutine()
-		return
+		rf.mu.Unlock()
+		return false
 	} else if !reply.Success {
 		rf.nextIndex[peerIdx]--
 		rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
@@ -659,19 +681,21 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int){
 		/*if rf.newMatchIdx==0{
 			return
 		}else */
-		if rf.newMatchIdx>rf.matchIndex[peerIdx]{
-			rf.nextIndex[peerIdx]=rf.newMatchIdx+1
-			rf.matchIndex[peerIdx]=rf.newMatchIdx
+		if newMatchIdx>rf.matchIndex[peerIdx]{
+			rf.nextIndex[peerIdx]=newMatchIdx+1
+			rf.matchIndex[peerIdx]=newMatchIdx
 			rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, nextIndex=%d, matchIndex=%d",
 				peerIdx, rf.nextIndex[peerIdx], rf.matchIndex[peerIdx]))
 		}
-		rf.successNum++
-		if rf.successNum>len(rf.peers)/2{
-			if rf.commitIndex<rf.newMatchIdx{
-				rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",rf.commitIndex,rf.newMatchIdx,rf.successNum))
-				rf.commitIndex=rf.newMatchIdx
+		(*successNum)++
+		if *successNum>len(rf.peers)/2{
+			if rf.commitIndex<newMatchIdx{
+				rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",
+					rf.commitIndex,newMatchIdx,*successNum))
+				rf.commitIndex=newMatchIdx
 			}else{
-				return
+				rf.mu.Unlock()
+				return false
 			}
 
 			var entriesApply []LogEntry
@@ -687,16 +711,19 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int){
 		}
 	}
 
-	return
+	rf.mu.Unlock()
+	return false
 }
 
 func (rf *Raft) SwitchToLeader(){
+	/*
 	rf.mu.Lock()
 
 	if rf.role!=CANDIDATE{
 		rf.mu.Unlock()
 		return
 	}
+	*/
 	rf.PrintLog("I become the leader")
 	rf.leaderId = rf.me
 	rf.role=LEADER
@@ -708,7 +735,7 @@ func (rf *Raft) SwitchToLeader(){
 		rf.matchIndex[i]=0
 	}
 	routineTerm:=rf.currentTerm
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 	//go rf.HeartbeatRoutine()
 	go rf.ReplicateLogRoutine(routineTerm)
 	//go rf.UpdateCommitIndexRoutine(routineTerm)
@@ -742,33 +769,25 @@ func (rf *Raft) HeartbeatRoutine(routineTerm int){
 
 func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	ticker:=time.NewTicker(time.Duration(heartbeatInterval*secondtonano))
-	//var replyIndexCh chan int
-	//var replyArray []AppendEntriesReply
-	//var newMatchIdx int
-	//var successNum int
+	var replyIndexCh chan int
+	var replyArray []AppendEntriesReply
+	var newMatchIdx int
+	var successNum int
+	var isReturn bool
 
 	for{
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20*time.Millisecond)
 		select{
 		case <-ticker.C:
-			//successNum = 1
-			rf.mu.Lock()
-			if rf.currentTerm != routineTerm || rf.isDead {
-				rf.mu.Unlock()
-				return
-			}
-			rf.BroadcastAppendEntriesRPC()
-			rf.mu.Unlock()
-		case index:=<-rf.replyIndexCh:
+			successNum = 1
+			replyIndexCh,replyArray,newMatchIdx,isReturn=rf.BroadcastAppendEntriesRPC(routineTerm)
+		case index:=<-replyIndexCh:
 			if index>=0{
-				rf.mu.Lock()
-				if rf.currentTerm != routineTerm || rf.isDead {
-					rf.mu.Unlock()
-					return
-				}
-				rf.HandleAppendEntriesReply(index)
-				rf.mu.Unlock()
+				isReturn=rf.HandleAppendEntriesReply(index,replyArray[index],newMatchIdx,&successNum,routineTerm)
 			}
+		}
+		if isReturn{
+			return
 		}
 
 	}
@@ -890,18 +909,23 @@ func (rf *Raft) ElectionRoutine(){
 	rf.mu.Unlock()
 
 	for{
+		time.Sleep(10*time.Millisecond)
 		select{
 		case <-rf.electionTimer.C:
 			replyIndexCh,replyArray=rf.BroadcastRequestVoteRPC()
 			voteCount=1
 		case index:=<-replyIndexCh:
 			if index>0{
-				rf.CountVote(replyArray[index],&voteCount)
+				if(rf.CountVote(replyArray[index],&voteCount)){
+					return
+				}
 			}
+		/*
 			if voteCount>len(replyArray)/2{
 				rf.SwitchToLeader()
 				return
 			}
+			*/
 		}
 		if rf.isDead{
 			return
