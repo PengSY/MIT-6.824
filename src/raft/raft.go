@@ -386,7 +386,7 @@ func ResetTimer(timer *time.Timer){
 	case <-timer.C:
 	default:
 	}
-	timer.Reset(time.Duration((rand.Float64()+1.5)*secondtonano))
+	timer.Reset(time.Duration((rand.Float64()+1)*secondtonano))
 }
 
 //
@@ -441,11 +441,13 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 	replyIndexCh:=make(chan int,len(rf.peers)-1)
 	replyArray:=make([]RequestVoteReply,len(rf.peers))
 
-	//rf.PrintLog("election timeout")
-
 	rf.role=CANDIDATE
 	rf.currentTerm++
 	rf.votedFor=rf.me
+	rf.leaderId=-1
+
+	rf.PrintLog("election timeout")
+
 	//rf.electionTimer.Reset(time.Duration((rand.Float64() + 2) * secondtonano))
 	ResetTimer(rf.electionTimer)
 	var args RequestVoteArgs
@@ -481,6 +483,7 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 //
 //broadcast heartbeat
 //
+/*
 func(rf *Raft) BroadcastHeartbeat(routineTerm int)(chan int,[]AppendEntriesReply,bool){
 	rf.mu.Lock()
 	var replyIndexCh chan int
@@ -533,7 +536,7 @@ func(rf *Raft) BroadcastHeartbeat(routineTerm int)(chan int,[]AppendEntriesReply
 
 	return replyIndexCh,replyArray,false
 }
-
+*/
 
 func (rf *Raft) BroadcastAppendEntriesRPC()(){
 	//var replyIndexCh chan int
@@ -620,6 +623,7 @@ func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int){
 	rf.mu.Unlock()
 }
 
+/*
 func (rf *Raft) HandleHeartbeatReply(reply AppendEntriesReply,routineTerm int){
 	rf.mu.Lock()
 	if rf.currentTerm!=routineTerm || rf.isDead{
@@ -637,6 +641,7 @@ func (rf *Raft) HandleHeartbeatReply(reply AppendEntriesReply,routineTerm int){
 	}
 	rf.mu.Unlock()
 }
+*/
 
 func (rf *Raft) HandleAppendEntriesReply(peerIdx int){
 	reply:=rf.replyArray[peerIdx]
@@ -663,8 +668,8 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int){
 		rf.successNum++
 		if rf.successNum>len(rf.peers)/2{
 			if rf.commitIndex<rf.newMatchIdx{
+				rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",rf.commitIndex,rf.newMatchIdx,rf.successNum))
 				rf.commitIndex=rf.newMatchIdx
-				rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d",rf.commitIndex,rf.newMatchIdx))
 			}else{
 				return
 			}
@@ -711,6 +716,7 @@ func (rf *Raft) SwitchToLeader(){
 	//go rf.LeaderRoutine(routineTerm)
 }
 
+/*
 func (rf *Raft) HeartbeatRoutine(routineTerm int){
 	ticker:=time.NewTicker(time.Duration((heartbeatInterval*secondtonano)))
 	var replyIndexCh chan int
@@ -732,7 +738,7 @@ func (rf *Raft) HeartbeatRoutine(routineTerm int){
 	}
 
 }
-
+*/
 
 func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	ticker:=time.NewTicker(time.Duration(heartbeatInterval*secondtonano))
@@ -742,6 +748,7 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	//var successNum int
 
 	for{
+		time.Sleep(20 * time.Millisecond)
 		select{
 		case <-ticker.C:
 			//successNum = 1
@@ -879,7 +886,7 @@ func (rf *Raft) ElectionRoutine(){
 	var voteCount int
 
 	rf.mu.Lock()
-	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+1.5)*secondtonano))
+	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+1)*secondtonano))
 	rf.mu.Unlock()
 
 	for{
