@@ -388,7 +388,7 @@ func ResetTimer(timer *time.Timer){
 	case <-timer.C:
 	default:
 	}
-	timer.Reset(time.Duration((rand.Float64()+1)*secondtonano))
+	timer.Reset(time.Duration((rand.Float64()+0.9)*secondtonano))
 }
 
 //
@@ -609,7 +609,7 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 	return replyIndexCh,replyArray,newMatchIdx,false
 }
 
-func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int)(bool){
+func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 	rf.mu.Lock()
 
 	if rf.role!=CANDIDATE{
@@ -624,8 +624,22 @@ func (rf *Raft) CountVote(reply RequestVoteReply,voteCount *int)(bool){
 		(*voteCount)++
 		rf.PrintLog("receive vote")
 		if *voteCount > len(rf.peers) / 2 {
-			rf.SwitchToLeader()
+
+			rf.PrintLog("I become the leader")
+			rf.leaderId = rf.me
+			rf.role = LEADER
+			for i := 0; i < len(rf.peers); i++ {
+				if (i == rf.me) {
+					continue
+				}
+				rf.nextIndex[i] = len(rf.log) + 1
+				rf.matchIndex[i] = 0
+			}
+
+			//rf.SwitchToLeader()
+			routineTerm:=rf.currentTerm
 			rf.mu.Unlock()
+			go rf.ReplicateLogRoutine(routineTerm)
 			return true
 		}
 	}else if term>rf.currentTerm{
@@ -715,15 +729,9 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 	return false
 }
 
+/*
 func (rf *Raft) SwitchToLeader(){
-	/*
-	rf.mu.Lock()
 
-	if rf.role!=CANDIDATE{
-		rf.mu.Unlock()
-		return
-	}
-	*/
 	rf.PrintLog("I become the leader")
 	rf.leaderId = rf.me
 	rf.role=LEADER
@@ -742,6 +750,7 @@ func (rf *Raft) SwitchToLeader(){
 	//go rf.HeartbeatRoutine(routineTerm)
 	//go rf.LeaderRoutine(routineTerm)
 }
+*/
 
 /*
 func (rf *Raft) HeartbeatRoutine(routineTerm int){
@@ -776,7 +785,7 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	var isReturn bool
 
 	for{
-		time.Sleep(20*time.Millisecond)
+		time.Sleep(10*time.Millisecond)
 		select{
 		case <-ticker.C:
 			successNum = 1
@@ -905,7 +914,7 @@ func (rf *Raft) ElectionRoutine(){
 	var voteCount int
 
 	rf.mu.Lock()
-	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+1)*secondtonano))
+	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+0.9)*secondtonano))
 	rf.mu.Unlock()
 
 	for{
@@ -916,7 +925,7 @@ func (rf *Raft) ElectionRoutine(){
 			voteCount=1
 		case index:=<-replyIndexCh:
 			if index>0{
-				if(rf.CountVote(replyArray[index],&voteCount)){
+				if(rf.HandleVoteReply(replyArray[index],&voteCount)){
 					return
 				}
 			}
