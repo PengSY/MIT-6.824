@@ -96,6 +96,8 @@ type AppendEntriesArgs struct{
 type AppendEntriesReply struct{
 	Term int
 	Success bool
+	FirstConflictIndex int
+	ConflictTerm int
 }
 
 //
@@ -268,14 +270,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.PrintLog(fmt.Sprintf("append rpc from s%d fail, because of inconsistence, prevLogIndex=%d, len(rf.log)=%d",
 			args.LeaderId,prevLogIndex,len(rf.log)))
 		reply.Success = false
+
+		if len(rf.log)==0{
+			reply.FirstConflictIndex=0
+		}else{
+			reply.FirstConflictIndex=len(rf.log)
+			reply.ConflictTerm=rf.log[len(rf.log)-1].Term
+		}
+
 		rf.mu.Unlock()
 		return
 	}
 	if (prevLogIndex>0 && rf.log[prevLogIndex-1].Term!=args.PrevLogTerm) {
 		rf.PrintLog(fmt.Sprintf("append rpc from s%d fail, because of inconsistence, prevLogIndex=%d, rf.log[prevLogIndex].Term=%d, args.prevLogTerm=%d",
 			args.LeaderId,prevLogIndex,rf.log[prevLogIndex-1].Term,args.PrevLogTerm))
-		rf.log=rf.log[:prevLogIndex-1]
 		reply.Success = false
+
+		reply.ConflictTerm=rf.log[prevLogIndex-1].Term
+		var idx int
+		for idx=prevLogIndex;idx>0;idx--{
+			if rf.log[idx-1].Term!=reply.ConflictTerm{
+				break
+			}
+		}
+		reply.FirstConflictIndex=idx+1
+
+		rf.log=rf.log[:prevLogIndex-1]
+
 		rf.mu.Unlock()
 		return
 	}
@@ -688,7 +709,17 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		rf.mu.Unlock()
 		return false
 	} else if !reply.Success {
-		rf.nextIndex[peerIdx]--
+		//rf.nextIndex[peerIdx]--
+
+		if reply.FirstConflictIndex==0{
+			rf.nextIndex[peerIdx]=1
+		}
+		if rf.log[reply.FirstConflictIndex-1].Term==reply.ConflictTerm{
+			rf.nextIndex[peerIdx]=reply.FirstConflictIndex+1
+		}else{
+			rf.nextIndex[peerIdx]=reply.FirstConflictIndex
+		}
+
 		rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
 			peerIdx, rf.nextIndex[peerIdx]))
 	} else {
