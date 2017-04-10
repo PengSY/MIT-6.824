@@ -168,10 +168,12 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 
-	//var lastLog interface{}
-	//if len(rf.Log)!=0{
-	//	lastLog=rf.Log[len(rf.Log)-1].Command
-	//}
+	/*
+	var lastLog interface{}
+	if len(rf.Log)!=0{
+		lastLog=rf.Log[len(rf.Log)-1].Command
+	}
+	*/
 
 	//rf.PrintLog(fmt.Sprintf("persist: CurrentTerm=%d,VotedFor=%d,LogLen=%d,LastLog=%d",
 		//rf.CurrentTerm,rf.VotedFor,len(rf.Log),lastLog))
@@ -200,10 +202,12 @@ func (rf *Raft) readPersist(data []byte) {
 	d:=gob.NewDecoder(r)
 	d.Decode(rf)
 
-	//var lastLog interface{}
-	//if len(rf.Log)!=0{
-		//lastLog=rf.Log[len(rf.Log)-1].Command
-	//}
+	/*
+	var lastLog interface{}
+	if len(rf.Log)!=0{
+		lastLog=rf.Log[len(rf.Log)-1].Command
+	}
+	*/
 
 	//rf.PrintLog(fmt.Sprintf("readPersist: CurrentTerm=%d,VotedFor=%d,LogLen=%d,LastLog=%d",
 		//rf.CurrentTerm,rf.VotedFor,len(rf.Log),lastLog))
@@ -349,6 +353,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	}
 
+
 	/*
 	if len(entries)==0{
 		//rf.PrintLog(fmt.Sprintf("recieve heartbeat from s%d",args.LeaderId))
@@ -357,6 +362,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			args.LeaderId, prevLogIndex + 1, len(rf.Log)))
 	}
 	*/
+
 
 	if needPersist{
 		rf.persist()
@@ -561,13 +567,13 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 	replyArray=make([]AppendEntriesReply,len(rf.peers))
 	newMatchIdx=len(rf.Log)
 	leaderId:=rf.leaderId
-	log:=make([]LogEntry,len(rf.Log))
-	copy(log,rf.Log)
+	//log:=make([]LogEntry,len(rf.Log))
+	//copy(log,rf.Log)
 	currentTerm:=rf.CurrentTerm
 	commitIndex:=rf.commitIndex
 	peerNum:=len(rf.peers)
-	nextIndex:=make([]int,len(rf.peers))
-	copy(nextIndex,rf.nextIndex)
+	//nextIndex:=make([]int,len(rf.peers))
+	//copy(nextIndex,rf.nextIndex)
 
 
 
@@ -576,7 +582,7 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 			continue
 		}
 
-		nextIndex:=nextIndex[i]
+		nextIndex:=rf.nextIndex[i]
 
 		var args AppendEntriesArgs
 		args.Term=currentTerm
@@ -584,10 +590,10 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 		args.LeaderCommit=commitIndex
 		args.PrevLogIndex=nextIndex-1
 		if args.PrevLogIndex>0{
-			args.PrevLogTerm=log[args.PrevLogIndex-1].Term
+			args.PrevLogTerm=rf.Log[args.PrevLogIndex-1].Term
 		}
-		if len(log)>0 && nextIndex<=newMatchIdx{
-			args.Entries=log[nextIndex-1:newMatchIdx]
+		if len(rf.Log)>0 && nextIndex<=newMatchIdx{
+			args.Entries=rf.Log[nextIndex-1:newMatchIdx]
 		}
 
 		go func(index int,args AppendEntriesArgs) {
@@ -698,7 +704,7 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		}
 		(*successNum)++
 		if *successNum>len(rf.peers)/2{
-			if rf.commitIndex<newMatchIdx{
+			if rf.commitIndex<newMatchIdx && rf.Log[newMatchIdx-1].Term==rf.CurrentTerm{
 				//rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",
 					//rf.commitIndex,newMatchIdx,*successNum))
 				rf.commitIndex=newMatchIdx
