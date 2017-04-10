@@ -17,7 +17,6 @@ package raft
 //   in the same server.
 //
 
-import "sync"
 import (
 	"labrpc"
 	"time"
@@ -25,10 +24,8 @@ import (
 	"math/rand"
 	"bytes"
 	"encoding/gob"
+	"sync"
 )
-
-// import "bytes"
-// import "encoding/gob"
 
 const secondtonano=1000000000
 const heartbeatInterval=0.15
@@ -212,7 +209,6 @@ func (rf *Raft) readPersist(data []byte) {
 	//rf.PrintLog(fmt.Sprintf("readPersist: CurrentTerm=%d,VotedFor=%d,LogLen=%d,LastLog=%d",
 		//rf.CurrentTerm,rf.VotedFor,len(rf.Log),lastLog))
 }
-
 
 //
 // example RequestVote RPC handler.
@@ -515,7 +511,6 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 
 	//rf.PrintLog("election timeout")
 
-	//rf.electionTimer.Reset(time.Duration((rand.Float64() + 2) * secondtonano))
 	ResetTimer(rf.electionTimer)
 	var args RequestVoteArgs
 	args.Term=rf.CurrentTerm
@@ -550,7 +545,6 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 	return replyIndexCh,replyArray
 }
 
-
 func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntriesReply,int,bool){
 	var replyIndexCh chan int
 	var replyArray []AppendEntriesReply
@@ -567,15 +561,9 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 	replyArray=make([]AppendEntriesReply,len(rf.peers))
 	newMatchIdx=len(rf.Log)
 	leaderId:=rf.leaderId
-	//log:=make([]LogEntry,len(rf.Log))
-	//copy(log,rf.Log)
 	currentTerm:=rf.CurrentTerm
 	commitIndex:=rf.commitIndex
 	peerNum:=len(rf.peers)
-	//nextIndex:=make([]int,len(rf.peers))
-	//copy(nextIndex,rf.nextIndex)
-
-
 
 	for i:=0;i<peerNum;i++{
 		if i==leaderId{
@@ -662,7 +650,6 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 	return false
 }
 
-
 func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,newMatchIdx int,successNum *int,routineTerm int)(bool){
 	rf.mu.Lock()
 
@@ -693,9 +680,6 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		//rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
 			//peerIdx, rf.nextIndex[peerIdx]))
 	} else {
-		/*if rf.newMatchIdx==0{
-			return
-		}else */
 		if newMatchIdx>rf.matchIndex[peerIdx]{
 			rf.nextIndex[peerIdx]=newMatchIdx+1
 			rf.matchIndex[peerIdx]=newMatchIdx
@@ -704,6 +688,7 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		}
 		(*successNum)++
 		if *successNum>len(rf.peers)/2{
+			//as figure8 says
 			if rf.commitIndex<newMatchIdx && rf.Log[newMatchIdx-1].Term==rf.CurrentTerm{
 				//rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",
 					//rf.commitIndex,newMatchIdx,*successNum))
@@ -730,7 +715,6 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 	return false
 }
 
-
 func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	ticker:=time.NewTicker(time.Duration(heartbeatInterval*secondtonano))
 	var replyIndexCh chan int
@@ -756,15 +740,12 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	}
 }
 
-
 //
 //Every time election timeout, ElectionRoutine broadcast
 //RequestVote rpc and waiting for reply. Send command STOP/
 //Reset through commandCh
 //
 func (rf *Raft) ElectionRoutine(){
-	//init election timer within 2 to 3 seconds
-	//timer:=time.NewTimer(time.Duration((rand.Float64()+2)*secondtonano))
 	var replyIndexCh chan int
 	var replyArray []RequestVoteReply
 	var voteCount int
@@ -791,7 +772,6 @@ func (rf *Raft) ElectionRoutine(){
 	}
 
 }
-
 
 func (rf *Raft) Apply(startIndex int,entriesApply []LogEntry){
 	for i, entry := range entriesApply {
@@ -824,7 +804,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
-	rf.mu.Lock()
 	rf.CurrentTerm=0
 	rf.commitIndex=0
 	rf.lastApplied=0
@@ -837,8 +816,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.isDead=false
 
 	rf.readPersist(persister.ReadRaftState())
-
-	rf.mu.Unlock()
 
 	rand.Seed(time.Now().UnixNano())
 	go rf.ElectionRoutine()
