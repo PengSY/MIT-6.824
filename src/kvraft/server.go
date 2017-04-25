@@ -6,6 +6,7 @@ import (
 	"log"
 	"raft"
 	"sync"
+	"fmt"
 )
 
 const Debug = 0
@@ -17,11 +18,16 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Id int64
+	LeaderId int
+	Key string
+	Value string
+	Type string
+	replyCh chan interface{}
 }
 
 type RaftKV struct {
@@ -33,15 +39,230 @@ type RaftKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	kvdb KVDatabase
+	uncommitOpMap map[int64]Op
+	commitOpList []int64
+	isDead bool
+	term int
 }
 
+func (kv *RaftKV) PrintLog(format string, a ...interface{}){
+	if Debug > 0 {
+		fmt.Printf("server%d:",kv.me)
+		fmt.Printf(format,a...)
+		fmt.Println()
+	}
+}
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	var op Op
+	var isLeader bool
+	var curTerm int
+	var replyCh chan interface{}
+
+	replyCh=make(chan interface{})
+	op.Id=args.Id
+	op.Key=args.Key
+	op.LeaderId=kv.me
+	op.Type="Get"
+	op.replyCh=replyCh
+
+	kv.PrintLog("recieve Get request from client, Key=%s, id=%d",args.Key,args.Id)
+
+	kv.mu.Lock()
+	if _,curTerm,isLeader=kv.rf.Start(op);!isLeader{
+		reply.WrongLeader=true
+		kv.mu.Unlock()
+		return
+	}
+	if curTerm!=kv.term{
+		for _,op:=range kv.uncommitOpMap{
+			if op.Type=="Get"{
+				var reply GetReply
+				reply.WrongLeader=true
+				op.replyCh<-reply
+			}else{
+				var reply PutAppendReply
+				reply.WrongLeader=true
+				op.replyCh<-reply
+			}
+		}
+		kv.term=curTerm
+	}
+	kv.uncommitOpMap[op.Id]=op
+	kv.mu.Unlock()
+
+	kv.PrintLog("waiting Get request to reach agreement,id=%d",op.Id)
+
+	*reply=(<-replyCh).(GetReply)
+	kv.PrintLog("Get request return, id=%d isWrongLeader=%t",op.Id,reply.WrongLeader)
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	var op Op
+	var isLeader bool
+	var curTerm int
+	var replyCh chan interface{}
+
+	replyCh=make(chan interface{})
+	op.Id=args.Id
+	op.Key=args.Key
+	op.Value=args.Value
+	op.Type=args.Op
+	op.replyCh=replyCh
+	op.LeaderId=kv.me
+
+	kv.PrintLog("recieve PutAppend request from client, Key=%s, Value=%s, id=%d",args.Key,args.Value,args.Id)
+
+	kv.mu.Lock()
+	if _,curTerm,isLeader=kv.rf.Start(op);!isLeader{
+		reply.WrongLeader=true
+		//kv.PrintLog("receive PutAppend request from client, not leader, id=%d",op.Id)
+		kv.mu.Unlock()
+		return
+	}
+	if curTerm!=kv.term{
+		for _,op:=range kv.uncommitOpMap{
+			if op.Type=="Get"{
+				var reply GetReply
+				reply.WrongLeader=true
+				op.replyCh<-reply
+			}else{
+				var reply PutAppendReply
+				reply.WrongLeader=true
+				op.replyCh<-reply
+			}
+		}
+		kv.term=curTerm
+	}
+	kv.uncommitOpMap[op.Id]=op
+	kv.mu.Unlock()
+	kv.PrintLog("waiting PutAppend request to reach agreement, id=%d",op.Id)
+
+	*reply=(<-replyCh).(PutAppendReply)
+	kv.PrintLog("PutAppend request return, id=%d, isWrongLeader=%t",op.Id,reply.WrongLeader)
+}
+
+func (kv *RaftKV) ApplyRoutine(){
+	for{
+		select{
+		case applyMsg:=<-kv.applyCh:
+			op:=(applyMsg.Command).(Op)
+			kv.PrintLog("raft apply index%d", applyMsg.Index)
+			switch opType := op.Type; opType{
+			case "Get":
+				kv.mu.Lock()
+				if kv.isDead {
+					kv.mu.Unlock()
+					return
+				}
+				curTerm,_:=kv.rf.GetState()
+				if curTerm!=kv.term{
+					for _, op := range kv.uncommitOpMap {
+						if op.Type == "Get" {
+							var reply GetReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						} else {
+							var reply PutAppendReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						}
+					}
+					kv.term = curTerm
+				}
+				if _,ok:=kv.uncommitOpMap[op.Id];!ok{
+					kv.mu.Unlock()
+					continue
+				}
+				var reply GetReply
+				var ok bool
+				reply.Value, ok = kv.kvdb.Get(op.Key)
+				if ok {
+					reply.Err = OK
+				} else {
+					reply.Err = ErrNoKey
+				}
+				reply.WrongLeader = false
+				op.replyCh <- reply
+				delete(kv.uncommitOpMap,op.Id)
+				kv.mu.Unlock()
+			case "Put":
+				fallthrough
+			case "Append":
+				kv.mu.Lock()
+				if kv.isDead {
+					kv.mu.Unlock()
+					return
+				}
+				//duplicate detection
+				isDupOp := false
+				for _, id := range kv.commitOpList {
+					if id == op.Id {
+						isDupOp = true
+						break
+					}
+				}
+
+				if !isDupOp {
+					if op.Type == "Put" {
+						kv.kvdb.Put(op.Key, op.Value)
+					} else {
+						kv.kvdb.Append(op.Key, op.Value)
+					}
+
+				}
+				kv.commitOpList = append(kv.commitOpList, op.Id)
+				curTerm,_:=kv.rf.GetState()
+				if curTerm!=kv.term{
+					for _, op := range kv.uncommitOpMap {
+						if op.Type == "Get" {
+							var reply GetReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						} else {
+							var reply PutAppendReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						}
+					}
+					kv.term = curTerm
+				}
+				if _,ok:=kv.uncommitOpMap[op.Id];!ok{
+					kv.mu.Unlock()
+					continue
+				}
+				var reply PutAppendReply
+				reply.WrongLeader = false
+				reply.Err = OK
+				//kv.PrintLog("I am leader and apply request, id=%d",op.Id)
+
+				op.replyCh <- reply
+				delete(kv.uncommitOpMap,op.Id)
+				kv.mu.Unlock()
+			default:
+				kv.mu.Lock()
+				curTerm, _ := kv.rf.GetState()
+				if curTerm != kv.term {
+					for _, op := range kv.uncommitOpMap {
+						if op.Type == "Get" {
+							var reply GetReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						} else {
+							var reply PutAppendReply
+							reply.WrongLeader = true
+							op.replyCh <- reply
+						}
+					}
+					kv.term = curTerm
+				}
+				kv.mu.Unlock()
+			}
+		}
+	}
 }
 
 //
@@ -53,6 +274,9 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *RaftKV) Kill() {
 	kv.rf.Kill()
 	// Your code here, if desired.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.isDead=true
 }
 
 //
@@ -79,10 +303,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.applyCh = make(chan raft.ApplyMsg,100)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.isDead=false
+	kv.kvdb.Make()
+	kv.uncommitOpMap=make(map[int64]Op)
+	kv.term,_=kv.rf.GetState()
+	//kv.idxOpMap=make(map[int]Op)
+	go kv.ApplyRoutine()
 
 	return kv
 }

@@ -5,12 +5,12 @@ type KVDatabase struct{
 }
 
 
-func (kvDB *KVDatabase) Get(key string) string{
+func (kvDB *KVDatabase) Get(key string) (string,bool){
 	value,ok:=kvDB.kv[key]
 	if ok{
-		return value
+		return value,ok
 	}else{
-		return ""
+		return "",ok
 	}
 }
 
@@ -27,9 +27,6 @@ func (kvDB *KVDatabase) Append(key string,value string){
 	}
 }
 
-func Make() *KVDatabase{
-	kvDB:=&KVDatabase{}
+func (kvDB *KVDatabase) Make(){
 	kvDB.kv=make(map[string]string)
-
-	return kvDB
 }

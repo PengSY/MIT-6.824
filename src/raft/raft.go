@@ -374,7 +374,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if rf.commitIndex<newCommitIndex{
 		rf.commitIndex=newCommitIndex
-		//rf.PrintLog(fmt.Sprintf("update commit to %d",rf.commitIndex))
+		rf.PrintLog(fmt.Sprintf("update commit to %d",rf.commitIndex))
 
 		var entriesApply []LogEntry
 		var startIndex int
@@ -438,7 +438,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 //log function for debug
 //
 func (rf *Raft) PrintLog(s string){
-	if rf.isDead{
+	if rf.isDead || Debug==0{
 		return
 	}
 	fmt.Println(fmt.Sprintf("s%d (Term=%d,LeaderId=%d):",rf.me,rf.CurrentTerm,rf.leaderId)+s)
@@ -479,7 +479,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		e:=LogEntry{command,term}
 		rf.Log=append(rf.Log,e)
 		index=len(rf.Log)
-		//rf.PrintLog(fmt.Sprintf("(leader) append log entry(term=%d,index=%d,command=%d)",term,index,command))
+		rf.PrintLog(fmt.Sprintf("(leader) append log entry(term=%d,index=%d,command=%d)",term,index,command))
 		rf.persist()
 	}
 	rf.mu.Unlock()
@@ -495,7 +495,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	rf.mu.Lock()
 	rf.isDead=true
+	rf.mu.Unlock()
 }
 
 func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
@@ -623,7 +625,7 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 		//rf.PrintLog("receive vote")
 		if *voteCount > len(rf.peers) / 2 {
 
-			//rf.PrintLog("I become the leader")
+			rf.PrintLog("I become the leader")
 			rf.leaderId = rf.me
 			rf.role = LEADER
 			for i := 0; i < len(rf.peers); i++ {
@@ -779,7 +781,7 @@ func (rf *Raft) Apply(startIndex int,entriesApply []LogEntry){
 		msg.Command = entry.Command
 		msg.Index = startIndex + i
 		rf.applyCh <- msg
-		//rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
+		rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
 	}
 }
 

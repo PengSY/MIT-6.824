@@ -2,12 +2,16 @@ package raftkv
 
 import "labrpc"
 import "crypto/rand"
-import "math/big"
+import (
+	"math/big"
+	"fmt"
+)
 
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leaderIdCache int
 }
 
 func nrand() int64 {
@@ -21,6 +25,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.leaderIdCache=0
 	return ck
 }
 
@@ -39,7 +44,33 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	leaderId:=ck.leaderIdCache
+	var args GetArgs
+	//var reply GetReply
+
+	args.Id=nrand()
+	args.Key=key
+	for{
+		var reply GetReply
+		leaderId=leaderId%len(ck.servers)
+		fmt.Printf("client:send Get request to server%d, key=%s, id=%d\n",leaderId,key,args.Id)
+		ok:=ck.servers[leaderId].Call("RaftKV.Get",&args,&reply)
+		if ok{
+			fmt.Printf("client:receive Get reply from server%d,id=%d\n",leaderId,args.Id)
+		}else{
+			fmt.Printf("client:not receive Get from server%d,id=%d\n",leaderId,args.Id)
+		}
+		if ok && !reply.WrongLeader{
+			ck.leaderIdCache=leaderId
+			fmt.Printf("client:receive successfult Get reply from server%d, key=%s, value=%s, id=%d\n",leaderId,key,reply.Value,args.Id)
+			if reply.Err==OK{
+				return reply.Value
+			}else{
+				return ""
+			}
+		}
+		leaderId++
+	}
 }
 
 //
@@ -54,6 +85,30 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	leaderId:=ck.leaderIdCache
+	var args PutAppendArgs
+
+	args.Id=nrand()
+	args.Value=value
+	args.Key=key
+	args.Op=op
+	for{
+		var reply PutAppendReply
+		leaderId=leaderId%len(ck.servers)
+		fmt.Printf("client:send PutAppend request to server%d, key=%s, value=%s, id=%d\n",leaderId,key,value,args.Id)
+		ok:=ck.servers[leaderId].Call("RaftKV.PutAppend",&args,&reply)
+		if ok{
+			fmt.Printf("client:receive PutAppend reply from server%d,id=%d\n",leaderId,args.Id)
+		}else{
+			fmt.Printf("client:not receive PutAppend from server%d,id=%d\n",leaderId,args.Id)
+		}
+		if ok && !reply.WrongLeader{
+			fmt.Printf("client:receive successful PutAppend reply from server%d,key-%s,value=%s,id=%d\n",leaderId,key,value,args.Id)
+			ck.leaderIdCache=leaderId
+			return
+		}
+		leaderId++
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
