@@ -27,6 +27,8 @@ import (
 	"sync"
 )
 
+const RaftDebug=0
+
 const secondtonano=1000000000
 const heartbeatInterval=0.15
 
@@ -438,7 +440,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 //log function for debug
 //
 func (rf *Raft) PrintLog(s string){
-	if rf.isDead || Debug==0{
+	if rf.isDead || RaftDebug==0{
 		return
 	}
 	fmt.Println(fmt.Sprintf("s%d (Term=%d,LeaderId=%d):",rf.me,rf.CurrentTerm,rf.leaderId)+s)
