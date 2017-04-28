@@ -28,7 +28,7 @@ import (
 )
 
 const RaftDebug=0
-
+const KILL=0
 const secondtonano=1000000000
 const heartbeatInterval=0.15
 
@@ -36,7 +36,7 @@ const LEADER=0
 const CANDIDATE=1
 const FOLLOWER=2
 type Role int64
-
+type KillMsg int
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -134,6 +134,7 @@ type Raft struct {
 	electionTimer *time.Timer
 
 	applyCh chan ApplyMsg
+	killmsgCh chan KillMsg
 	role Role
 	isDead bool
 }
@@ -440,7 +441,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 //log function for debug
 //
 func (rf *Raft) PrintLog(s string){
-	if rf.isDead || RaftDebug==0{
+	if RaftDebug==0 || rf.isDead{
 		return
 	}
 	fmt.Println(fmt.Sprintf("s%d (Term=%d,LeaderId=%d):",rf.me,rf.CurrentTerm,rf.leaderId)+s)
@@ -497,9 +498,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
-	rf.mu.Lock()
+	rf.killmsgCh<-KILL
 	rf.isDead=true
-	rf.mu.Unlock()
 }
 
 func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
@@ -556,7 +556,7 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 
 	rf.mu.Lock()
 
-	if rf.CurrentTerm != routineTerm || rf.isDead {
+	if rf.CurrentTerm != routineTerm{
 		rf.mu.Unlock()
 		return replyIndexCh,replyArray,newMatchIdx,true
 	}
@@ -657,7 +657,7 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,newMatchIdx int,successNum *int,routineTerm int)(bool){
 	rf.mu.Lock()
 
-	if rf.CurrentTerm != routineTerm || rf.isDead {
+	if rf.CurrentTerm != routineTerm{
 		rf.mu.Unlock()
 		return true
 	}
@@ -729,6 +729,8 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 
 	for{
 		select{
+		case <-rf.killmsgCh:
+			return
 		case <-ticker.C:
 			successNum = 1
 			replyIndexCh,replyArray,newMatchIdx,isReturn=rf.BroadcastAppendEntriesRPC(routineTerm)
@@ -740,7 +742,6 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 		if isReturn{
 			return
 		}
-
 	}
 }
 
@@ -760,6 +761,8 @@ func (rf *Raft) ElectionRoutine(){
 
 	for{
 		select{
+		case <-rf.killmsgCh:
+			return
 		case <-rf.electionTimer.C:
 			replyIndexCh,replyArray=rf.BroadcastRequestVoteRPC()
 			voteCount=1
@@ -770,9 +773,6 @@ func (rf *Raft) ElectionRoutine(){
 				}
 			}
 		}
-		if rf.isDead{
-			return
-		}
 	}
 
 }
@@ -782,6 +782,7 @@ func (rf *Raft) Apply(startIndex int,entriesApply []LogEntry){
 		var msg ApplyMsg
 		msg.Command = entry.Command
 		msg.Index = startIndex + i
+		rf.PrintLog(fmt.Sprintf("waiting for apply index %d",msg.Index))
 		rf.applyCh <- msg
 		rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
 	}
@@ -817,6 +818,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VotedFor=-1
 	rf.role=FOLLOWER
 	rf.applyCh=applyCh
+	rf.killmsgCh=make(chan KillMsg)
 	rf.isDead=false
 
 	rf.readPersist(persister.ReadRaftState())

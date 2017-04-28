@@ -12,7 +12,10 @@ import (
 
 const Debug = 1
 
-const ResendTimeout=5
+const ResendTimeout=2
+const KILL=0
+
+type KillMsg int
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -30,6 +33,7 @@ type Op struct {
 	Key string
 	Value string
 	Type string
+	timer *time.Timer
 	replyCh chan interface{}
 }
 
@@ -43,19 +47,21 @@ type RaftKV struct {
 
 	// Your definitions here.
 	kvdb KVDatabase
-	commitOpList []int64
+	commitOps map[int64]int64
+	killmsgCh chan KillMsg
 	isDead bool
 }
 
 func (kv *RaftKV) PrintLog(format string, a ...interface{}){
-	if Debug > 0 {
-		fmt.Println(fmt.Sprintf("s%d:",kv.me)+fmt.Sprintf(format,a...))
+	if Debug ==0 || kv.isDead{
+		return
 	}
+	fmt.Println(fmt.Sprintf("s%d:",kv.me)+fmt.Sprintf(format,a...))
 }
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	var timer *time.Timer
+	//var timer *time.Timer
 	var op Op
 	var replyCh chan interface{}
 
@@ -65,28 +71,27 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	op.Key=args.Key
 	op.Type="Get"
 	op.replyCh=replyCh
+	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 
-	kv.mu.Lock()
+	kv.PrintLog("recieve Get request(id=%d)",op.Id)
 	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
-		kv.mu.Unlock()
 		return
 	}
-	timer=time.NewTimer(ResendTimeout*time.Second)
-	kv.mu.Unlock()
+
+	kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
-	case <-timer.C:
+	case <-op.timer.C:
 		reply.WrongLeader=true
 		kv.PrintLog("resend timeout,id=%d",op.Id)
 	case replyInf:=<-replyCh:
 		*reply=replyInf.(GetReply)
-		kv.PrintLog("complete aggrement, return GetReply,id=%d",op.Id)
 	}
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	var timer *time.Timer
+	//var timer *time.Timer
 	var op Op
 	var replyCh chan interface{}
 
@@ -97,22 +102,21 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	op.Value=args.Value
 	op.Type=args.Op
 	op.replyCh=replyCh
+	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 
-	kv.mu.Lock()
+	kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
 	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
-		kv.mu.Unlock()
 		return
 	}
-	timer=time.NewTimer(ResendTimeout*time.Second)
-	kv.mu.Unlock()
+
+	kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
-	case <-timer.C:
+	case <-op.timer.C:
 		reply.WrongLeader=true
 		kv.PrintLog("resend timeout,id=%d",op.Id)
 	case replyInf:=<-replyCh:
 		*reply=replyInf.(PutAppendReply)
-		kv.PrintLog("complete aggrement, return PutAppendReply,id=%d",op.Id)
 	}
 }
 
@@ -123,14 +127,21 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // turn off debug output from this instance.
 //
 func (kv *RaftKV) Kill() {
-	kv.rf.Kill()
 	// Your code here, if desired.
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	kv.PrintLog("I am going to kill myself")
+	kv.rf.Kill()
+	kv.killmsgCh<-KILL
 	kv.isDead=true
+	kv.PrintLog("I am dead")
 }
 
 func (kv *RaftKV) ApplyGet(op Op){
+	if op.LeaderId!=kv.me{
+		return
+	}
+	if op.timer==nil || !op.timer.Stop(){
+		return
+	}
 	var ok bool
 	var reply GetReply
 	reply.WrongLeader=false
@@ -140,6 +151,7 @@ func (kv *RaftKV) ApplyGet(op Op){
 	}else{
 		reply.Err=ErrNoKey
 	}
+	kv.PrintLog("complete aggrement, return GetReply,id=%d",op.Id)
 	op.replyCh<-reply
 }
 
@@ -150,43 +162,42 @@ func (kv *RaftKV) ApplyPutAppend(op Op,isDup bool){
 		} else {
 			kv.kvdb.Append(op.Key, op.Value)
 		}
-		kv.commitOpList = append(kv.commitOpList, op.Id)
+		kv.commitOps[op.Id]=op.Id
 	}
 	if op.LeaderId!=kv.me{
+		return
+	}
+	if op.timer==nil || !op.timer.Stop(){
 		return
 	}
 	var reply PutAppendReply
 	reply.WrongLeader=false
 	reply.Err=OK
+	kv.PrintLog("complete aggrement, return PutAppendReply,id=%d",op.Id)
 	op.replyCh<-reply
 }
 
 func (kv *RaftKV) ApplyRoutine(){
-	for{
-		kv.mu.Lock()
-		if kv.isDead{
-			kv.rf.Kill()
-			kv.mu.Unlock()
+	for {
+		select {
+		case <-kv.killmsgCh:
 			return
-		}
-		kv.mu.Unlock()
-		msg:=<-kv.applyCh
-		op:=msg.Command.(Op)
+		case msg := <-kv.applyCh:
+			kv.PrintLog("agreement reached(index=%d)",msg.Index)
+			op := msg.Command.(Op)
 		//duplicate detection
-		isDup:=false
-		for _,opId:=range kv.commitOpList{
-			if opId==op.Id{
-				isDup=true
+			isDup := false
+			_,isDup=kv.commitOps[op.Id]
+			switch op.Type{
+			case "Get":
+				kv.ApplyGet(op)
+			case "Put":
+				fallthrough
+			case "Append":
+				kv.ApplyPutAppend(op, isDup)
 			}
 		}
-		switch op.Type{
-		case "Get":
-			kv.ApplyGet(op)
-		case "Put":
-			fallthrough
-		case "Append":
-			kv.ApplyPutAppend(op,isDup)
-		}
+
 	}
 }
 
@@ -218,7 +229,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.killmsgCh=make(chan KillMsg)
 	kv.isDead=false
+	kv.commitOps=make(map[int64]int64)
 	kv.kvdb.Make()
 	go kv.ApplyRoutine()
 
