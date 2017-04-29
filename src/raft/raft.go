@@ -30,7 +30,7 @@ import (
 const RaftDebug=0
 const KILL=0
 const secondtonano=1000000000
-const heartbeatInterval=0.15
+const heartbeatInterval=0.1
 
 const LEADER=0
 const CANDIDATE=1
@@ -137,6 +137,7 @@ type Raft struct {
 	killmsgCh chan KillMsg
 	role Role
 	isDead bool
+	commitCh chan int
 }
 
 // return currentTerm and whether this server
@@ -378,7 +379,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.commitIndex<newCommitIndex{
 		rf.commitIndex=newCommitIndex
 		rf.PrintLog(fmt.Sprintf("update commit to %d",rf.commitIndex))
-
+		rf.commitCh<-rf.commitIndex
+		/*
 		var entriesApply []LogEntry
 		var startIndex int
 		if rf.lastApplied < rf.commitIndex {
@@ -389,6 +391,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.lastApplied = rf.commitIndex
 		}
 		rf.Apply(startIndex, entriesApply)
+		*/
+
 	}
 
 
@@ -702,6 +706,10 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 				return false
 			}
 
+			if rf.lastApplied<rf.commitIndex{
+				rf.commitCh<-rf.commitIndex
+			}
+			/*
 			var entriesApply []LogEntry
 			var startIndex int
 			if rf.lastApplied < rf.commitIndex {
@@ -712,6 +720,7 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 				rf.lastApplied = rf.commitIndex
 			}
 			rf.Apply(startIndex,entriesApply)
+			*/
 		}
 	}
 
@@ -777,6 +786,7 @@ func (rf *Raft) ElectionRoutine(){
 
 }
 
+/*
 func (rf *Raft) Apply(startIndex int,entriesApply []LogEntry){
 	for i, entry := range entriesApply {
 		var msg ApplyMsg
@@ -785,6 +795,26 @@ func (rf *Raft) Apply(startIndex int,entriesApply []LogEntry){
 		rf.PrintLog(fmt.Sprintf("waiting for apply index %d",msg.Index))
 		rf.applyCh <- msg
 		rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
+	}
+}
+*/
+
+func (rf *Raft) ApplyRoutine(){
+	for commitIndex:=range rf.commitCh{
+		rf.mu.Lock()
+		entries:=make([]LogEntry,commitIndex-rf.lastApplied)
+		copy(entries, rf.Log[rf.lastApplied:commitIndex])
+		startIndex := rf.lastApplied + 1
+		rf.lastApplied=commitIndex
+		rf.mu.Unlock()
+		for i, entry := range entries {
+			var msg ApplyMsg
+			msg.Command = entry.Command
+			msg.Index = startIndex + i
+			rf.PrintLog(fmt.Sprintf("waiting for apply index %d", msg.Index))
+			rf.applyCh <- msg
+			rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
+		}
 	}
 }
 
@@ -820,11 +850,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh=applyCh
 	rf.killmsgCh=make(chan KillMsg)
 	rf.isDead=false
+	rf.commitCh=make(chan int,100)
 
 	rf.readPersist(persister.ReadRaftState())
 
 	rand.Seed(time.Now().UnixNano())
 	go rf.ElectionRoutine()
+	go rf.ApplyRoutine()
 
 	return rf
 }

@@ -12,6 +12,8 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
 	leaderIdCache int
+	me int64
+	lastOpId int
 }
 
 func nrand() int64 {
@@ -26,7 +28,16 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.leaderIdCache=0
+	ck.me=nrand()
+	ck.lastOpId=0
 	return ck
+}
+
+func (ck *Clerk) PrintLog(format string, a ...interface{}){
+	if Debug ==0{
+		return
+	}
+	fmt.Println(fmt.Sprintf("client (%d)",ck.me)+fmt.Sprintf(format,a...))
 }
 
 //
@@ -48,15 +59,17 @@ func (ck *Clerk) Get(key string) string {
 	var args GetArgs
 	//var reply GetReply
 
-	args.Id=nrand()
+	ck.lastOpId++
+	args.Id=ck.lastOpId
 	args.Key=key
+	args.CkId=ck.me
 	for{
 		var reply GetReply
 		leaderId=leaderId%len(ck.servers)
-		fmt.Printf("client:send Get request to server%d, key=%s, id=%d\n",leaderId,key,args.Id)
+		ck.PrintLog("send Get request to server%d, key=%s, id=%d\n",leaderId,key,args.Id)
 		ok:=ck.servers[leaderId].Call("RaftKV.Get",&args,&reply)
 		if ok{
-			fmt.Printf("client:receive Get reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,reply.Value,!reply.WrongLeader)
+			ck.PrintLog("receive Get reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,reply.Value,!reply.WrongLeader)
 			if !reply.WrongLeader{
 				ck.leaderIdCache = leaderId
 				if reply.Err == OK {
@@ -68,7 +81,7 @@ func (ck *Clerk) Get(key string) string {
 				leaderId++
 			}
 		}else{
-			fmt.Printf("client:not receive Get from server%d,id=%d\n",leaderId,args.Id)
+			ck.PrintLog("not receive Get from server%d,id=%d\n",leaderId,args.Id)
 			leaderId++
 		}
 	}
@@ -89,17 +102,19 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	leaderId:=ck.leaderIdCache
 	var args PutAppendArgs
 
-	args.Id=nrand()
+	ck.lastOpId++
+	args.Id=ck.lastOpId
 	args.Value=value
 	args.Key=key
 	args.Op=op
+	args.CkId=ck.me
 	for{
 		var reply PutAppendReply
 		leaderId=leaderId%len(ck.servers)
-		fmt.Printf("client:send PutAppend request to server%d, key=%s, value=%s, id=%d\n",leaderId,key,value,args.Id)
+		ck.PrintLog("send PutAppend request to server%d, key=%s, value=%s, id=%d\n",leaderId,key,value,args.Id)
 		ok:=ck.servers[leaderId].Call("RaftKV.PutAppend",&args,&reply)
 		if ok{
-			fmt.Printf("client:receive PutAppend reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,value,!reply.WrongLeader)
+			ck.PrintLog("receive PutAppend reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,value,!reply.WrongLeader)
 			if !reply.WrongLeader{
 				if reply.Err==OK{
 					return
@@ -108,7 +123,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				leaderId++
 			}
 		}else{
-			fmt.Printf("client:not receive PutAppend from server%d,id=%d\n",leaderId,args.Id)
+			ck.PrintLog("not receive PutAppend from server%d,id=%d\n",leaderId,args.Id)
 			leaderId++
 		}
 	}

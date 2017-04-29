@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
-const ResendTimeout=2
+const ResendTimeout=1
 const KILL=0
 
 type KillMsg int
@@ -28,11 +28,12 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Id int64
+	Id int
 	LeaderId int
 	Key string
 	Value string
 	Type string
+	CkId int64
 	timer *time.Timer
 	replyCh chan interface{}
 }
@@ -47,7 +48,7 @@ type RaftKV struct {
 
 	// Your definitions here.
 	kvdb KVDatabase
-	commitOps map[int64]int64
+	commitOps map[int64]int
 	killmsgCh chan KillMsg
 	isDead bool
 }
@@ -70,16 +71,17 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	op.LeaderId=kv.me
 	op.Key=args.Key
 	op.Type="Get"
+	op.CkId=args.CkId
 	op.replyCh=replyCh
 	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 
-	kv.PrintLog("recieve Get request(id=%d)",op.Id)
+	//kv.PrintLog("recieve Get request(id=%d)",op.Id)
 	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
 
-	kv.PrintLog("waiting for agreement(id=%d)",op.Id)
+	//kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
 	case <-op.timer.C:
 		reply.WrongLeader=true
@@ -101,16 +103,17 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	op.Key=args.Key
 	op.Value=args.Value
 	op.Type=args.Op
+	op.CkId=args.CkId
 	op.replyCh=replyCh
 	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 
-	kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
+	//kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
 	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
 
-	kv.PrintLog("waiting for agreement(id=%d)",op.Id)
+	//kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
 	case <-op.timer.C:
 		reply.WrongLeader=true
@@ -128,7 +131,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 //
 func (kv *RaftKV) Kill() {
 	// Your code here, if desired.
-	kv.PrintLog("I am going to kill myself")
+	//kv.PrintLog("I am going to kill myself")
 	kv.rf.Kill()
 	kv.killmsgCh<-KILL
 	kv.isDead=true
@@ -155,14 +158,25 @@ func (kv *RaftKV) ApplyGet(op Op){
 	op.replyCh<-reply
 }
 
-func (kv *RaftKV) ApplyPutAppend(op Op,isDup bool){
+func (kv *RaftKV) ApplyPutAppend(op Op){
+	isDup:=false
+	if opid,ok:=kv.commitOps[op.CkId];ok{
+		if opid==op.Id{
+			isDup=true
+		}else{
+			kv.commitOps[op.CkId]=op.Id
+		}
+	}else{
+		kv.commitOps[op.CkId]=op.Id
+	}
+
 	if !isDup{
 		if op.Type == "Put" {
 			kv.kvdb.Put(op.Key, op.Value)
 		} else {
 			kv.kvdb.Append(op.Key, op.Value)
 		}
-		kv.commitOps[op.Id]=op.Id
+		//kv.commitOps[op.CkId]=op.Id
 	}
 	if op.LeaderId!=kv.me{
 		return
@@ -183,23 +197,22 @@ func (kv *RaftKV) ApplyRoutine(){
 		case <-kv.killmsgCh:
 			return
 		case msg := <-kv.applyCh:
-			kv.PrintLog("agreement reached(index=%d)",msg.Index)
 			op := msg.Command.(Op)
+			kv.PrintLog("agreement reached(id=%d)",op.Id)
 		//duplicate detection
-			isDup := false
-			_,isDup=kv.commitOps[op.Id]
 			switch op.Type{
 			case "Get":
 				kv.ApplyGet(op)
 			case "Put":
 				fallthrough
 			case "Append":
-				kv.ApplyPutAppend(op, isDup)
+				kv.ApplyPutAppend(op)
 			}
 		}
 
 	}
 }
+
 
 //
 // servers[] contains the ports of the set of
@@ -231,7 +244,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 	kv.killmsgCh=make(chan KillMsg)
 	kv.isDead=false
-	kv.commitOps=make(map[int64]int64)
+	kv.commitOps=make(map[int64]int)
 	kv.kvdb.Make()
 	go kv.ApplyRoutine()
 
