@@ -1,12 +1,12 @@
 package raftkv
 
 type KVDatabase struct{
-	kv map[string]string
+	Kv map[string]string
 }
 
 
 func (kvDB *KVDatabase) Get(key string) (string,bool){
-	value,ok:=kvDB.kv[key]
+	value,ok:=kvDB.Kv[key]
 	if ok{
 		return value,ok
 	}else{
@@ -15,18 +15,18 @@ func (kvDB *KVDatabase) Get(key string) (string,bool){
 }
 
 func (kvDB *KVDatabase) Put(key string,value string){
-	kvDB.kv[key]=value
+	kvDB.Kv[key]=value
 }
 
 func (kvDB *KVDatabase) Append(key string,value string){
-	oldValue,ok:=kvDB.kv[key]
+	oldValue,ok:=kvDB.Kv[key]
 	if ok{
-		kvDB.kv[key]=oldValue+value
+		kvDB.Kv[key]=oldValue+value
 	}else{
-		kvDB.kv[key]=value
+		kvDB.Kv[key]=value
 	}
 }
 
 func (kvDB *KVDatabase) Make(){
-	kvDB.kv=make(map[string]string)
+	kvDB.Kv=make(map[string]string)
 }

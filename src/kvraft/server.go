@@ -8,10 +8,10 @@ import (
 	"sync"
 	"fmt"
 	"time"
+	"bytes"
 )
 
 const Debug = 0
-
 const ResendTimeout=1
 const KILL=0
 
@@ -47,8 +47,10 @@ type RaftKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	kvdb KVDatabase
-	commitOps map[int64]int
+	persister *raft.Persister
+	Kvdb KVDatabase
+	ClerkCommitOps map[int64]int
+
 	killmsgCh chan KillMsg
 	isDead bool
 }
@@ -148,7 +150,7 @@ func (kv *RaftKV) ApplyGet(op Op){
 	var ok bool
 	var reply GetReply
 	reply.WrongLeader=false
-	reply.Value,ok=kv.kvdb.Get(op.Key)
+	reply.Value,ok=kv.Kvdb.Get(op.Key)
 	if ok{
 		reply.Err=OK
 	}else{
@@ -160,23 +162,22 @@ func (kv *RaftKV) ApplyGet(op Op){
 
 func (kv *RaftKV) ApplyPutAppend(op Op){
 	isDup:=false
-	if opid,ok:=kv.commitOps[op.CkId];ok{
+	if opid,ok:=kv.ClerkCommitOps[op.CkId];ok{
 		if opid==op.Id{
 			isDup=true
 		}else{
-			kv.commitOps[op.CkId]=op.Id
+			kv.ClerkCommitOps[op.CkId]=op.Id
 		}
 	}else{
-		kv.commitOps[op.CkId]=op.Id
+		kv.ClerkCommitOps[op.CkId]=op.Id
 	}
 
 	if !isDup{
 		if op.Type == "Put" {
-			kv.kvdb.Put(op.Key, op.Value)
+			kv.Kvdb.Put(op.Key, op.Value)
 		} else {
-			kv.kvdb.Append(op.Key, op.Value)
+			kv.Kvdb.Append(op.Key, op.Value)
 		}
-		//kv.commitOps[op.CkId]=op.Id
 	}
 	if op.LeaderId!=kv.me{
 		return
@@ -197,22 +198,38 @@ func (kv *RaftKV) ApplyRoutine(){
 		case <-kv.killmsgCh:
 			return
 		case msg := <-kv.applyCh:
-			op := msg.Command.(Op)
-			kv.PrintLog("agreement reached(id=%d)",op.Id)
-		//duplicate detection
-			switch op.Type{
-			case "Get":
-				kv.ApplyGet(op)
-			case "Put":
-				fallthrough
-			case "Append":
-				kv.ApplyPutAppend(op)
+			if msg.UseSnapshot{
+				kv.persister.SaveSnapshot(msg.Snapshot)
+				reader:=bytes.NewBuffer(msg.Snapshot)
+				decoder:=gob.NewDecoder(reader)
+				decoder.Decode(kv)
+			}else{
+				op := msg.Command.(Op)
+				kv.PrintLog("agreement reached(id=%d)", op.Id)
+				switch op.Type{
+				case "Get":
+					kv.ApplyGet(op)
+				case "Put":
+					fallthrough
+				case "Append":
+					kv.ApplyPutAppend(op)
+				}
+				if kv.maxraftstate>0 && kv.persister.RaftStateSize()>=kv.maxraftstate{
+					kv.PrintLog("begin snapshot")
+					writer:=new(bytes.Buffer)
+					encoder:=gob.NewEncoder(writer)
+					encoder.Encode(kv)
+					snapshot:=writer.Bytes()
+					kv.persister.SaveSnapshot(snapshot)
+					kv.rf.GarbageCollect(msg.Index)
+					kv.PrintLog("finish snapshot")
+				}
 			}
+
 		}
 
 	}
 }
-
 
 //
 // servers[] contains the ports of the set of
@@ -240,12 +257,18 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg,100)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.persister=persister
 
 	// You may need initialization code here.
 	kv.killmsgCh=make(chan KillMsg)
 	kv.isDead=false
-	kv.commitOps=make(map[int64]int)
-	kv.kvdb.Make()
+	kv.ClerkCommitOps=make(map[int64]int)
+	kv.Kvdb.Make()
+
+	reader:=bytes.NewBuffer(kv.persister.ReadSnapshot())
+	decoder:=gob.NewDecoder(reader)
+	decoder.Decode(kv)
+
 	go kv.ApplyRoutine()
 
 	return kv
