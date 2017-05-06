@@ -29,8 +29,7 @@ import (
 
 const RaftDebug=0
 const KILL=0
-const secondtonano=1000000000
-const heartbeatInterval=0.1
+const heartbeatInterval=50
 
 const LEADER=0
 const CANDIDATE=1
@@ -105,7 +104,6 @@ type AppendEntriesReply struct{
 	Term int
 	Success bool
 	FirstConflictIndex int
-	ConflictTerm int
 }
 
 type InstallSnapshotArgs struct{
@@ -153,7 +151,6 @@ type Raft struct {
 	electionTimer *time.Timer
 
 	applyCh chan ApplyMsg
-	killmsgCh chan KillMsg
 	role Role
 	isDead bool
 	commitCh chan int
@@ -230,7 +227,17 @@ func (rf *Raft) InstallSnapshotRPC(args *InstallSnapshotArgs,reply *InstallSnaps
 	}else if args.Term>rf.CurrentTerm{
 		rf.CurrentTerm=args.Term
 	}
-
+	if rf.CurrentTerm<args.Term{
+		rf.CurrentTerm=args.Term
+		rf.VotedFor=-1
+		if rf.role==CANDIDATE{
+			rf.role=FOLLOWER
+		}else if rf.role==LEADER{
+			//rf.PrintLog(fmt.Sprintf("find larger term in append rpc from s%d, step down to follower",args.LeaderId))
+			rf.role=FOLLOWER
+			go rf.ElectionRoutine()
+		}
+	}
 	if rf.leaderId!=args.LeaderId{
 		rf.leaderId=args.LeaderId
 	}
@@ -288,12 +295,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	lastLogTerm=rf.Log.GetLastLogEntryTerm()
 
 	if  rf.VotedFor>=0 || args.Term < rf.CurrentTerm || args.LastLogTerm<lastLogTerm || (args.LastLogTerm==lastLogTerm && args.LastLogIndex<lastLogIndex){
-		//rf.PrintLog(fmt.Sprintf("I did not vote for s%d",args.CandidateId))
+		rf.PrintLog(fmt.Sprintf("I did not vote for s%d",args.CandidateId))
 		reply.VoteGranted = false
 		rf.mu.Unlock()
 		return
 	}
-	//rf.PrintLog(fmt.Sprintf("I vote for s%d",args.CandidateId))
+	rf.PrintLog(fmt.Sprintf("I vote for s%d",args.CandidateId))
 	ResetTimer(rf.electionTimer)
 	reply.VoteGranted=true
 	rf.VotedFor=args.CandidateId
@@ -344,7 +351,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 
 		reply.FirstConflictIndex=rf.Log.GetLastLogEntryIndex()
-		reply.ConflictTerm=rf.Log.GetLastLogEntryTerm()
+		//reply.ConflictTerm=rf.Log.GetLastLogEntryTerm()
 
 		if needPersist{
 			rf.persist()
@@ -359,11 +366,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//rf.PrintLog(fmt.Sprintf("append rpc from s%d fail, because of inconsistence, prevLogIndex=%d, rf.Log[prevLogIndex].Term=%d, args.prevLogTerm=%d",
 			//args.LeaderId,prevLogIndex,rf.Log[prevLogIndex-1].Term,args.PrevLogTerm))
 		reply.Success = false
-
-		reply.ConflictTerm=rf.Log.GetLogEntry(prevLogIndex).Term
+		conflictTerm:=rf.Log.GetLogEntry(prevLogIndex).Term
+		//reply.ConflictTerm=rf.Log.GetLogEntry(prevLogIndex).Term
 		var idx int
 		for idx=prevLogIndex;idx>=rf.Log.GetHeadLogEntryIndex();idx--{
-			if rf.Log.GetLogEntry(idx).Term!=reply.ConflictTerm{
+			if rf.Log.GetLogEntry(idx).Term!=conflictTerm{
 				break
 			}
 		}
@@ -397,14 +404,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 
-	/*
+
 	if len(entries)==0{
 		//rf.PrintLog(fmt.Sprintf("recieve heartbeat from s%d",args.LeaderId))
 	}else{
 		rf.PrintLog(fmt.Sprintf("append rpc from s%d success, append entries [%d,%d]",
-			args.LeaderId, prevLogIndex + 1, len(rf.Log)))
+			args.LeaderId, prevLogIndex + 1, rf.Log.GetLastLogEntryIndex()))
 	}
-	*/
+
 
 
 	if needPersist{
@@ -492,7 +499,7 @@ func ResetTimer(timer *time.Timer){
 	case <-timer.C:
 	default:
 	}
-	timer.Reset(time.Duration((rand.Float64()+0.9)*secondtonano))
+	timer.Reset(time.Duration(time.Duration(rand.Intn(150)+150)*time.Millisecond))
 }
 
 //
@@ -537,15 +544,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
-	rf.killmsgCh<-KILL
 	rf.isDead=true
 }
 
-func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
+func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply,bool){
 	rf.mu.Lock()
 
 	replyIndexCh:=make(chan int,len(rf.peers)-1)
 	replyArray:=make([]RequestVoteReply,len(rf.peers))
+	if rf.isDead {
+		rf.mu.Unlock()
+		return replyIndexCh,replyArray,true
+	}
 
 	rf.role=CANDIDATE
 	rf.CurrentTerm++
@@ -572,7 +582,7 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 			continue
 		}
 		go func(index int){
-			//rf.PrintLog(fmt.Sprintf("send RequestVote RPC to s%d",index))
+			rf.PrintLog(fmt.Sprintf("send RequestVote RPC to s%d",index))
 			res:=rf.sendRequestVote(index,&args,&replyArray[index])
 			if res{
 				replyIndexCh<-index
@@ -583,7 +593,7 @@ func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply){
 		}(i)
 	}
 
-	return replyIndexCh,replyArray
+	return replyIndexCh,replyArray,false
 }
 
 func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntriesReply,int,bool){
@@ -593,7 +603,7 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 
 	rf.mu.Lock()
 
-	if rf.CurrentTerm != routineTerm{
+	if rf.CurrentTerm != routineTerm || rf.isDead{
 		rf.mu.Unlock()
 		return replyIndexCh,replyArray,newMatchIdx,true
 	}
@@ -643,19 +653,20 @@ func (rf *Raft) BroadcastAppendEntriesRPC(routineTerm int)(chan int,[]AppendEntr
 		}
 
 		go func(index int,args AppendEntriesArgs) {
-			/*
+
 			if len(args.Entries)==0{
-				rf.PrintLog(fmt.Sprintf("(leader) send heartbeat to s%d",index))
+				//rf.PrintLog(fmt.Sprintf("(leader) send heartbeat to s%d",index))
 			}else{
 				rf.PrintLog(fmt.Sprintf("(leader) send append rpc to s%d from index %d",index, nextIndex))
 			}
-			*/
+
 
 			res := rf.sendAppendEntries(index, &args, &replyArray[index])
 			if res {
 				replyIndexCh <- index
 			} else {
 				replyIndexCh <- -1
+				rf.PrintLog(fmt.Sprintf("not receive reply from s%d",index))
 			}
 		}(i,args)
 	}
@@ -670,6 +681,10 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 	if rf.role!=CANDIDATE{
 		rf.mu.Unlock()
 		return false
+	}
+	if rf.isDead{
+		rf.mu.Unlock()
+		return true
 	}
 
 	term:=reply.Term
@@ -709,7 +724,7 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,newMatchIdx int,successNum *int,routineTerm int)(bool){
 	rf.mu.Lock()
 
-	if rf.CurrentTerm != routineTerm{
+	if rf.CurrentTerm != routineTerm || rf.isDead{
 		rf.mu.Unlock()
 		return true
 	}
@@ -723,28 +738,22 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		rf.mu.Unlock()
 		return false
 	} else if !reply.Success {
-		if reply.FirstConflictIndex<rf.Log.GetHeadLogEntryIndex(){
-			rf.nextIndex[peerIdx]=reply.FirstConflictIndex
-		}else if rf.Log.GetLogEntry(reply.FirstConflictIndex).Term==reply.ConflictTerm{
-			rf.nextIndex[peerIdx]=reply.FirstConflictIndex+1
-		}else{
-			rf.nextIndex[peerIdx]=reply.FirstConflictIndex
-		}
-		//rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
-			//peerIdx, rf.nextIndex[peerIdx]))
+		rf.nextIndex[peerIdx]=reply.FirstConflictIndex
+		rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
+			peerIdx, rf.nextIndex[peerIdx]))
 	} else {
 		if newMatchIdx>rf.matchIndex[peerIdx]{
 			rf.nextIndex[peerIdx]=newMatchIdx+1
 			rf.matchIndex[peerIdx]=newMatchIdx
-			//rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, nextIndex=%d, matchIndex=%d",
-				//peerIdx, rf.nextIndex[peerIdx], rf.matchIndex[peerIdx]))
+			rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, nextIndex=%d, matchIndex=%d",
+				peerIdx, rf.nextIndex[peerIdx], rf.matchIndex[peerIdx]))
 		}
 		(*successNum)++
 		if *successNum>len(rf.peers)/2{
 			//as figure8 says
 			if rf.commitIndex<newMatchIdx && rf.Log.GetLogEntry(newMatchIdx).Term==rf.CurrentTerm{
-				//rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",
-					//rf.commitIndex,newMatchIdx,*successNum))
+				rf.PrintLog(fmt.Sprintf("(leader) update commitIndex form %d to %d,successNum=%d",
+					rf.commitIndex,newMatchIdx,*successNum))
 				rf.commitIndex=newMatchIdx
 			}else{
 				rf.mu.Unlock()
@@ -778,7 +787,7 @@ func (rf *Raft) HandleInstallSnapshotReply(reply InstallSnapshotReply,id int){
 }
 
 func (rf *Raft) ReplicateLogRoutine(routineTerm int){
-	ticker:=time.NewTicker(time.Duration(heartbeatInterval*secondtonano))
+	ticker:=time.NewTicker(time.Duration(heartbeatInterval*time.Millisecond))
 	var replyIndexCh chan int
 	var replyArray []AppendEntriesReply
 	var newMatchIdx int
@@ -786,19 +795,20 @@ func (rf *Raft) ReplicateLogRoutine(routineTerm int){
 	var isReturn bool
 
 	for{
+
 		select{
-		case <-rf.killmsgCh:
-			return
 		case <-ticker.C:
 			successNum = 1
 			replyIndexCh,replyArray,newMatchIdx,isReturn=rf.BroadcastAppendEntriesRPC(routineTerm)
+			if isReturn{
+				return
+			}
 		case index:=<-replyIndexCh:
 			if index>=0{
-				isReturn=rf.HandleAppendEntriesReply(index,replyArray[index],newMatchIdx,&successNum,routineTerm)
+				if(rf.HandleAppendEntriesReply(index,replyArray[index],newMatchIdx,&successNum,routineTerm)){
+					return
+				}
 			}
-		}
-		if isReturn{
-			return
 		}
 	}
 }
@@ -812,17 +822,19 @@ func (rf *Raft) ElectionRoutine(){
 	var replyIndexCh chan int
 	var replyArray []RequestVoteReply
 	var voteCount int
+	var isReturn bool
 
 	rf.mu.Lock()
-	rf.electionTimer=time.NewTimer(time.Duration((rand.Float64()+0.9)*secondtonano))
+	rf.electionTimer=time.NewTimer(time.Duration(rand.Intn(150)+150)*time.Millisecond)
 	rf.mu.Unlock()
 
 	for{
 		select{
-		case <-rf.killmsgCh:
-			return
 		case <-rf.electionTimer.C:
-			replyIndexCh,replyArray=rf.BroadcastRequestVoteRPC()
+			replyIndexCh,replyArray,isReturn=rf.BroadcastRequestVoteRPC()
+			if isReturn{
+				return
+			}
 			voteCount=1
 		case index:=<-replyIndexCh:
 			if index>=0{
@@ -840,6 +852,10 @@ func (rf *Raft) ApplyRoutine(){
 		select {
 		case commitIndex:=<-rf.commitCh:
 			rf.mu.Lock()
+			if rf.isDead{
+				rf.mu.Unlock()
+				return
+			}
 			if rf.lastApplied>=commitIndex{
 				rf.mu.Unlock()
 				continue
@@ -853,17 +869,21 @@ func (rf *Raft) ApplyRoutine(){
 				msg.Index = entry.Index
 				msg.UseSnapshot=false
 				rf.applyCh <- msg
-				//rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
+				rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
 			}
 			rf.mu.Unlock()
 		case snapshotMsg:=<-rf.snapshotCh:
 			var msg ApplyMsg
 			msg.UseSnapshot=true
-			//msg.Snapshot=make([]byte,len(snapshotMsg.snapshot))
-			//copy(msg.Snapshot,snapshotMsg.snapshot)
 			msg.Snapshot=snapshotMsg.snapshot
 			msg.Index=snapshotMsg.index
+			rf.mu.Lock()
+			if rf.isDead{
+				rf.mu.Unlock()
+				return
+			}
 			rf.applyCh<-msg
+			rf.mu.Unlock()
 			//rf.PrintLog("send snap shot msg to kvserver")
 		}
 	}
@@ -873,6 +893,9 @@ func (rf *Raft) GarbageCollect(endIndex int){
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	if rf.Log.GetHeadLogEntryIndex()>=endIndex{
+		return
+	}
 	rf.Log.SetLog(rf.Log.GetLogEntriesAfter(endIndex))
 	rf.persist()
 }
@@ -907,7 +930,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VotedFor=-1
 	rf.role=FOLLOWER
 	rf.applyCh=applyCh
-	rf.killmsgCh=make(chan KillMsg)
 	rf.isDead=false
 	rf.commitCh=make(chan int,100)
 	rf.snapshotCh=make(chan SnapshotMsg,10)

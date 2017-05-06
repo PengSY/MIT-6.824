@@ -12,7 +12,7 @@ import (
 )
 
 const Debug = 0
-const ResendTimeout=1
+const ResendTimeout=0.5
 const KILL=0
 
 type KillMsg int
@@ -68,6 +68,23 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	var op Op
 	var replyCh chan interface{}
 
+	if _,isLeader:=kv.rf.GetState();!isLeader{
+		reply.WrongLeader=true
+		return
+	}
+
+	/*
+	kv.mu.Lock()
+	if opOld,ok:=kv.ClerkCommitOps[args.CkId];ok && opOld.Id==args.Id{
+		reply.WrongLeader=false
+		reply.Err=OK
+		reply.Value=opOld.Value
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+	*/
+
 	replyCh=make(chan interface{})
 	op.Id=args.Id
 	op.LeaderId=kv.me
@@ -75,13 +92,10 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	op.Type="Get"
 	op.CkId=args.CkId
 	op.replyCh=replyCh
-	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 
+	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	//kv.PrintLog("recieve Get request(id=%d)",op.Id)
-	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
-		reply.WrongLeader=true
-		return
-	}
+	kv.rf.Start(op)
 
 	//kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
@@ -99,6 +113,21 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	var op Op
 	var replyCh chan interface{}
 
+	if _,isLeader:=kv.rf.GetState();!isLeader{
+		reply.WrongLeader=true
+		return
+	}
+
+	//kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
+	kv.mu.Lock()
+	if opid,ok:=kv.ClerkCommitOps[args.CkId];ok && opid==args.Id{
+		reply.WrongLeader=false
+		reply.Err=OK
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+
 	replyCh=make(chan interface{})
 	op.Id=args.Id
 	op.LeaderId=kv.me
@@ -107,14 +136,9 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	op.Type=args.Op
 	op.CkId=args.CkId
 	op.replyCh=replyCh
+
 	op.timer=time.NewTimer(ResendTimeout*1000*time.Millisecond)
-
-	//kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
-	if _,_,isLeader:=kv.rf.Start(op);!isLeader{
-		reply.WrongLeader=true
-		return
-	}
-
+	kv.rf.Start(op)
 	//kv.PrintLog("waiting for agreement(id=%d)",op.Id)
 	select{
 	case <-op.timer.C:
@@ -147,10 +171,12 @@ func (kv *RaftKV) ApplyGet(op Op){
 	if op.timer==nil || !op.timer.Stop(){
 		return
 	}
+
 	var ok bool
 	var reply GetReply
 	reply.WrongLeader=false
 	reply.Value,ok=kv.Kvdb.Get(op.Key)
+	op.Value=reply.Value
 	if ok{
 		reply.Err=OK
 	}else{
@@ -162,6 +188,7 @@ func (kv *RaftKV) ApplyGet(op Op){
 
 func (kv *RaftKV) ApplyPutAppend(op Op){
 	isDup:=false
+	kv.mu.Lock()
 	if opid,ok:=kv.ClerkCommitOps[op.CkId];ok{
 		if opid==op.Id{
 			isDup=true
@@ -171,6 +198,7 @@ func (kv *RaftKV) ApplyPutAppend(op Op){
 	}else{
 		kv.ClerkCommitOps[op.CkId]=op.Id
 	}
+	kv.mu.Unlock()
 
 	if !isDup{
 		if op.Type == "Put" {
@@ -205,7 +233,7 @@ func (kv *RaftKV) ApplyRoutine(){
 				decoder.Decode(kv)
 			}else{
 				op := msg.Command.(Op)
-				kv.PrintLog("agreement reached(id=%d)", op.Id)
+				kv.PrintLog("agreement reached(id=%d,index=%d)", op.Id,msg.Index)
 				switch op.Type{
 				case "Get":
 					kv.ApplyGet(op)
@@ -215,14 +243,16 @@ func (kv *RaftKV) ApplyRoutine(){
 					kv.ApplyPutAppend(op)
 				}
 				if kv.maxraftstate>0 && kv.persister.RaftStateSize()>=kv.maxraftstate{
+					kv.mu.Lock()
 					kv.PrintLog("begin snapshot")
-					writer:=new(bytes.Buffer)
-					encoder:=gob.NewEncoder(writer)
+					writer := new(bytes.Buffer)
+					encoder := gob.NewEncoder(writer)
 					encoder.Encode(kv)
-					snapshot:=writer.Bytes()
+					snapshot := writer.Bytes()
 					kv.persister.SaveSnapshot(snapshot)
 					kv.rf.GarbageCollect(msg.Index)
 					kv.PrintLog("finish snapshot")
+					kv.mu.Unlock()
 				}
 			}
 
