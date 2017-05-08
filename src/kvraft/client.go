@@ -74,7 +74,7 @@ func (ck *Clerk) Get(key string) string {
 				ck.leaderIdCache = leaderId
 				if reply.Err == OK {
 					return reply.Value
-				} else if reply.Err==ErrNoKey{
+				} else{
 					return ""
 				}
 			}else{
@@ -116,9 +116,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		if ok{
 			ck.PrintLog("receive PutAppend reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,value,!reply.WrongLeader)
 			if !reply.WrongLeader{
-				if reply.Err==OK{
-					return
-				}
+				ck.leaderIdCache = leaderId
+				return
 			}else{
 				leaderId++
 			}

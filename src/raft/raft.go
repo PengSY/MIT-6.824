@@ -28,7 +28,6 @@ import (
 )
 
 const RaftDebug=0
-const KILL=0
 const heartbeatInterval=50
 
 const LEADER=0
@@ -224,8 +223,6 @@ func (rf *Raft) InstallSnapshotRPC(args *InstallSnapshotArgs,reply *InstallSnaps
 	reply.Term=rf.CurrentTerm
 	if args.Term<rf.CurrentTerm{
 		return
-	}else if args.Term>rf.CurrentTerm{
-		rf.CurrentTerm=args.Term
 	}
 	if rf.CurrentTerm<args.Term{
 		rf.CurrentTerm=args.Term

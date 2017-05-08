@@ -12,7 +12,7 @@ import (
 )
 
 const Debug = 0
-const ResendTimeout=0.5
+const ResendTimeout=0.7
 const KILL=0
 
 type KillMsg int
@@ -72,18 +72,6 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		reply.WrongLeader=true
 		return
 	}
-
-	/*
-	kv.mu.Lock()
-	if opOld,ok:=kv.ClerkCommitOps[args.CkId];ok && opOld.Id==args.Id{
-		reply.WrongLeader=false
-		reply.Err=OK
-		reply.Value=opOld.Value
-		kv.mu.Unlock()
-		return
-	}
-	kv.mu.Unlock()
-	*/
 
 	replyCh=make(chan interface{})
 	op.Id=args.Id
