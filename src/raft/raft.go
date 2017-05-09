@@ -541,6 +541,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	//rf.PrintLog("raft:I am dead")
 	rf.isDead=true
 }
 

@@ -5,13 +5,15 @@ import "crypto/rand"
 import (
 	"math/big"
 	"fmt"
+	"time"
 )
 
+const ResendTimeout=0.15
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	leaderIdCache int
+	//leaderIdCache int
 	me int64
 	lastOpId int
 }
@@ -27,7 +29,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	ck.leaderIdCache=0
+	//ck.leaderIdCache=0
 	ck.me=nrand()
 	ck.lastOpId=0
 	return ck
@@ -55,14 +57,14 @@ func (ck *Clerk) PrintLog(format string, a ...interface{}){
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	leaderId:=ck.leaderIdCache
+	var replyCh chan GetReply
 	var args GetArgs
-	//var reply GetReply
 
 	ck.lastOpId++
 	args.Id=ck.lastOpId
 	args.Key=key
 	args.CkId=ck.me
+	/*
 	for{
 		var reply GetReply
 		leaderId=leaderId%len(ck.servers)
@@ -85,6 +87,45 @@ func (ck *Clerk) Get(key string) string {
 			leaderId++
 		}
 	}
+	*/
+
+	for{
+		replyCh=make(chan GetReply,len(ck.servers))
+		for i:=0;i<len(ck.servers);i++{
+			go func(replyCh chan GetReply,serverIdx int,args GetArgs){
+				var reply GetReply
+				ck.PrintLog("send Get request,id=%d",args.Id)
+				ok:=ck.servers[serverIdx].Call("RaftKV.Get",&args,&reply)
+				if !ok{
+					reply.WrongLeader=true
+				}
+				replyCh<-reply
+			}(replyCh,i,args)
+		}
+		timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+		Loop:
+		for{
+			replyNum:=0
+			select{
+			case <-timer.C:
+				break Loop
+			case reply:=<-replyCh:
+				ck.PrintLog("receive Get reply,id=%d,wrongLeader=%t",args.Id,reply.WrongLeader)
+				if !reply.WrongLeader{
+					if reply.Err==OK{
+						return reply.Value
+					}else{
+						return ""
+					}
+				}
+				replyNum++
+				if replyNum>=len(ck.servers){
+					break Loop
+				}
+			}
+		}
+	}
+
 }
 
 //
@@ -99,8 +140,8 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	leaderId:=ck.leaderIdCache
 	var args PutAppendArgs
+	var replyCh chan PutAppendReply
 
 	ck.lastOpId++
 	args.Id=ck.lastOpId
@@ -108,6 +149,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key=key
 	args.Op=op
 	args.CkId=ck.me
+	/*
 	for{
 		var reply PutAppendReply
 		leaderId=leaderId%len(ck.servers)
@@ -124,6 +166,39 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}else{
 			ck.PrintLog("not receive PutAppend from server%d,id=%d\n",leaderId,args.Id)
 			leaderId++
+		}
+	}
+	*/
+	for{
+		replyCh=make(chan PutAppendReply,len(ck.servers))
+		for i:=0;i<len(ck.servers);i++{
+			go func(replyCh chan PutAppendReply,serverIdx int,args PutAppendArgs){
+				var reply PutAppendReply
+				ck.PrintLog("send PutAppend request,id=%d",args.Id)
+				ok:=ck.servers[serverIdx].Call("RaftKV.PutAppend",&args,&reply)
+				if !ok{
+					reply.WrongLeader=true
+				}
+				replyCh<-reply
+			}(replyCh,i,args)
+		}
+		timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+		Loop:
+		for{
+			replyNum:=0
+			select {
+			case <-timer.C:
+				break Loop
+			case reply:=<-replyCh:
+				ck.PrintLog("receive PutAppend reply,id=%d,wrongLeader=%t",args.Id,reply.WrongLeader)
+				if !reply.WrongLeader{
+					return
+				}
+				replyNum++
+				if replyNum>=len(ck.servers){
+					break Loop
+				}
+			}
 		}
 	}
 }
