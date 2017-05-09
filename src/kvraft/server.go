@@ -108,7 +108,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	//kv.PrintLog("recieve PutAppend request(id=%d)",op.Id)
 	kv.mu.Lock()
-	if opid,ok:=kv.ClerkCommitOps[args.CkId];ok && opid==args.Id{
+	if opid,ok:=kv.ClerkCommitOps[args.CkId];ok && opid>=args.Id{
 		reply.WrongLeader=false
 		reply.Err=OK
 		kv.mu.Unlock()
@@ -170,7 +170,7 @@ func (kv *RaftKV) ApplyGet(op Op){
 	}else{
 		reply.Err=ErrNoKey
 	}
-	kv.PrintLog("complete aggrement, return GetReply,id=%d",op.Id)
+	kv.PrintLog("complete aggrement, return GetReply,client=%d,id=%d",op.CkId,op.Id)
 	op.replyCh<-reply
 }
 
@@ -178,7 +178,7 @@ func (kv *RaftKV) ApplyPutAppend(op Op){
 	isDup:=false
 	kv.mu.Lock()
 	if opid,ok:=kv.ClerkCommitOps[op.CkId];ok{
-		if opid==op.Id{
+		if opid>=op.Id{
 			isDup=true
 		}else{
 			kv.ClerkCommitOps[op.CkId]=op.Id
@@ -204,7 +204,7 @@ func (kv *RaftKV) ApplyPutAppend(op Op){
 	var reply PutAppendReply
 	reply.WrongLeader=false
 	reply.Err=OK
-	kv.PrintLog("complete aggrement, return PutAppendReply,id=%d",op.Id)
+	kv.PrintLog("complete aggrement, return PutAppendReply,client=%d,id=%d",op.CkId,op.Id)
 	op.replyCh<-reply
 }
 
