@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const ResendTimeout=0.15
+const ResendTimeout=0.1
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd

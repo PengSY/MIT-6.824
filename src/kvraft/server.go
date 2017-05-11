@@ -194,8 +194,8 @@ func (kv *RaftKV) ApplyRoutine(){
 			return
 		case msg := <-kv.applyCh:
 			if msg.UseSnapshot{
-				kv.persister.SaveSnapshot(msg.Snapshot)
-				reader:=bytes.NewBuffer(msg.Snapshot)
+				//kv.persister.SaveSnapshot(msg.Snapshot)
+				reader:=bytes.NewBuffer(kv.persister.ReadSnapshot())
 				decoder:=gob.NewDecoder(reader)
 				decoder.Decode(kv)
 			}else{

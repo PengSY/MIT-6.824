@@ -29,12 +29,12 @@ import (
 
 const RaftDebug=0
 const heartbeatInterval=50
+const UseSnapshot=0
 
 const LEADER=0
 const CANDIDATE=1
 const FOLLOWER=2
 type Role int64
-type KillMsg int
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -46,11 +46,6 @@ type ApplyMsg struct {
 	Command     interface{}
 	UseSnapshot bool   // ignore for lab2; only used in lab3
 	Snapshot    []byte // ignore for lab2; only used in lab3
-}
-
-type SnapshotMsg struct{
-	snapshot []byte
-	index int
 }
 
 //
@@ -153,7 +148,7 @@ type Raft struct {
 	role Role
 	isDead bool
 	commitCh chan int
-	snapshotCh chan SnapshotMsg
+	snapshotCh chan int
 }
 
 // return currentTerm and whether this server
@@ -249,14 +244,15 @@ func (rf *Raft) InstallSnapshotRPC(args *InstallSnapshotArgs,reply *InstallSnaps
 		rf.PrintLog("already have last included index of snapshot")
 		return
 	}
+	rf.persister.SaveSnapshot(args.Data)
 	rf.lastApplied=args.LastIncludedIndex
 	rf.commitIndex=args.LastIncludedIndex
 	rf.Log.SetLog(make([]LogEntry,1))
 	rf.Log.SetHeadLogEntry(args.LastIncludedIndex,args.LastIncludedTerm)
 
-	var snapshotMsg SnapshotMsg
-	snapshotMsg.snapshot=args.Data
-	rf.snapshotCh<-snapshotMsg
+	//var snapshotMsg SnapshotMsg
+	//snapshotMsg.snapshot=args.Data
+	rf.snapshotCh<-UseSnapshot
 
 	rf.PrintLog("snapshot done")
 
@@ -870,11 +866,9 @@ func (rf *Raft) ApplyRoutine(){
 				rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
 			}
 			rf.mu.Unlock()
-		case snapshotMsg:=<-rf.snapshotCh:
+		case <-rf.snapshotCh:
 			var msg ApplyMsg
 			msg.UseSnapshot=true
-			msg.Snapshot=snapshotMsg.snapshot
-			msg.Index=snapshotMsg.index
 			rf.mu.Lock()
 			if rf.isDead{
 				rf.mu.Unlock()
@@ -930,7 +924,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh=applyCh
 	rf.isDead=false
 	rf.commitCh=make(chan int,100)
-	rf.snapshotCh=make(chan SnapshotMsg,10)
+	rf.snapshotCh=make(chan int,10)
 	rf.Log.Make()
 
 	rf.readPersist(persister.ReadRaftState())
