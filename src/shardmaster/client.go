@@ -7,7 +7,17 @@ package shardmaster
 import "labrpc"
 import "time"
 import "crypto/rand"
-import "math/big"
+import (
+	"math/big"
+	"fmt"
+)
+
+func (ck *Clerk) PrintLog(format string, a ...interface{}){
+	if ShardMasterDebug==0{
+		return
+	}
+	fmt.Println(fmt.Sprintf("c%d:",ck.me)+fmt.Sprintf(format,a...))
+}
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -39,6 +49,8 @@ func (ck *Clerk) Query(num int) Config {
 	args.OpId=ck.lastOpId
 	args.CkId=ck.me
 	args.Num = num
+
+	ck.PrintLog("send Query request,opid=%d",args.OpId)
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -60,6 +72,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args.CkId=ck.me
 	args.Servers = servers
 
+	ck.PrintLog("send Join request,opid=%d,new servers=%v",args.OpId,args.Servers)
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {

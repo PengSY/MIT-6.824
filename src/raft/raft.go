@@ -343,7 +343,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			//args.LeaderId,prevLogIndex,len(rf.Log)))
 		reply.Success = false
 
-		reply.FirstConflictIndex=rf.Log.GetLastLogEntryIndex()
+		reply.FirstConflictIndex=rf.Log.GetLastLogEntryIndex()+1
 		//reply.ConflictTerm=rf.Log.GetLastLogEntryTerm()
 
 		if needPersist{
@@ -387,6 +387,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if index>rf.Log.GetLastLogEntryIndex(){
 			rf.Log.AppendLogEntries(entries[i:])
+			rf.PrintLog(fmt.Sprintf("entries[%d:]:%v",i,entries[i:]))
+			rf.PrintLog(fmt.Sprintf("append success,log:%v",rf.Log.Log))
 			break
 		}
 		if rf.Log.GetLogEntry(index).Term!=entry.Term{
@@ -395,7 +397,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 	}
-
 
 
 	if len(entries)==0{
