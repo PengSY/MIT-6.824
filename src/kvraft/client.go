@@ -13,7 +13,6 @@ const ResendTimeout=0.1
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	//leaderIdCache int
 	me int64
 	lastOpId int
 }
@@ -29,7 +28,6 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	//ck.leaderIdCache=0
 	ck.me=nrand()
 	ck.lastOpId=0
 	return ck
@@ -64,30 +62,6 @@ func (ck *Clerk) Get(key string) string {
 	args.Id=ck.lastOpId
 	args.Key=key
 	args.CkId=ck.me
-	/*
-	for{
-		var reply GetReply
-		leaderId=leaderId%len(ck.servers)
-		ck.PrintLog("send Get request to server%d, key=%s, id=%d\n",leaderId,key,args.Id)
-		ok:=ck.servers[leaderId].Call("RaftKV.Get",&args,&reply)
-		if ok{
-			ck.PrintLog("receive Get reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,reply.Value,!reply.WrongLeader)
-			if !reply.WrongLeader{
-				ck.leaderIdCache = leaderId
-				if reply.Err == OK {
-					return reply.Value
-				} else{
-					return ""
-				}
-			}else{
-				leaderId++
-			}
-		}else{
-			ck.PrintLog("not receive Get from server%d,id=%d\n",leaderId,args.Id)
-			leaderId++
-		}
-	}
-	*/
 
 	for{
 		replyCh=make(chan GetReply,len(ck.servers))
@@ -149,26 +123,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Key=key
 	args.Op=op
 	args.CkId=ck.me
-	/*
-	for{
-		var reply PutAppendReply
-		leaderId=leaderId%len(ck.servers)
-		ck.PrintLog("send PutAppend request to server%d, key=%s, value=%s, id=%d\n",leaderId,key,value,args.Id)
-		ok:=ck.servers[leaderId].Call("RaftKV.PutAppend",&args,&reply)
-		if ok{
-			ck.PrintLog("receive PutAppend reply from server%d,id=%d,key=%s,value=%s,isSuc=%t\n",leaderId,args.Id,key,value,!reply.WrongLeader)
-			if !reply.WrongLeader{
-				ck.leaderIdCache = leaderId
-				return
-			}else{
-				leaderId++
-			}
-		}else{
-			ck.PrintLog("not receive PutAppend from server%d,id=%d\n",leaderId,args.Id)
-			leaderId++
-		}
-	}
-	*/
 	for{
 		replyCh=make(chan PutAppendReply,len(ck.servers))
 		for i:=0;i<len(ck.servers);i++{

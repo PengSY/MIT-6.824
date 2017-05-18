@@ -85,11 +85,12 @@ func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 	op.MyType=JoinOp
 	op.replyCh=replyCh
 	op.LeaderId=sm.me
-	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+
 	if _,_,isLeader:=sm.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
+	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	sm.PrintLog("receive Join Request from c%d, waiting aggreement",args.CkId)
 	select {
 	case <-timer.C:
@@ -108,11 +109,12 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 	op.Args=*args
 	op.replyCh=replyCh
 	op.LeaderId=sm.me
-	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+
 	if _,_,isLeader:=sm.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
+	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	sm.PrintLog("receive Leave Request from c%d, waiting aggreement",args.CkId)
 	select {
 	case <-timer.C:
@@ -131,11 +133,12 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	op.Args=*args
 	op.replyCh=replyCh
 	op.LeaderId=sm.me
-	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+
 	if _,_,isLeader:=sm.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
+	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	sm.PrintLog("receive Move Request from c%d, waiting aggreement",args.CkId)
 	select {
 	case <-timer.C:
@@ -154,12 +157,12 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	op.Args=*args
 	op.replyCh=replyCh
 	op.LeaderId=sm.me
-	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
+
 	if _,_,isLeader:=sm.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
-	sm.PrintLog("receive Query Request from c%d, waiting aggreement",args.CkId)
+	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	select {
 	case <-timer.C:
 		reply.WrongLeader=true

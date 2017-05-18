@@ -74,8 +74,6 @@ type MoveReply struct {
 
 type QueryArgs struct {
 	Num int // desired config number
-	OpId int
-	CkId int64
 }
 
 type QueryReply struct {

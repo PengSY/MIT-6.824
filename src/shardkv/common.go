@@ -17,6 +17,14 @@ const (
 
 type Err string
 
+const(
+	PutOp="Put"
+	AppendOp="Append"
+	GetOp="Get"
+)
+
+type OpType string
+
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
@@ -26,6 +34,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OpId int
+	CkId int64
 }
 
 type PutAppendReply struct {
@@ -36,6 +46,8 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	OpId int
+	CkId int64
 }
 
 type GetReply struct {
