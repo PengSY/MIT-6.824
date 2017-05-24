@@ -12,7 +12,10 @@ import "labrpc"
 import "crypto/rand"
 import "math/big"
 import "shardmaster"
-import "time"
+import (
+	"time"
+	"fmt"
+)
 
 //
 // which shard is a key in?
@@ -63,6 +66,13 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	return ck
 }
 
+func (ck *Clerk) PrintLog(format string, a ...interface{}){
+	if ShardKVDebug==0{
+		return
+	}
+	fmt.Println(fmt.Sprintf("c%d:",ck.me)+fmt.Sprintf(format,a...))
+}
+
 //
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -72,23 +82,25 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
-	ck.lastOpId++
-	args.OpId=ck.lastOpId
-	args.CkId=ck.me
+	shard := key2shard(key)
+	args.ShardId=shard
 
 	for {
-		shard := key2shard(key)
+		args.ConfigNum=ck.config.Num
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
+				ck.PrintLog("send Get request to gid %d, key=%s, shardId=%d,configNum=%d",gid,args.Key,args.ShardId,ck.config.Num)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.PrintLog("receive success Get reply from gid %d, shardId=%d",gid,args.ShardId)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					ck.PrintLog("receive Get reply from gid %d ,key=%s, shardId=%d, WrongGroup",gid,args.Key,args.ShardId)
 					break
 				}
 			}
@@ -106,6 +118,7 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	shard := key2shard(key)
 	args := PutAppendArgs{}
 	args.Key = key
 	args.Value = value
@@ -113,19 +126,23 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.lastOpId++
 	args.OpId=ck.lastOpId
 	args.CkId=ck.me
+	args.ShardId=shard
 
 	for {
-		shard := key2shard(key)
+		args.ConfigNum=ck.config.Num
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
+				ck.PrintLog("send PutAppend request to gid %d, key=%s, value=%s, shardId=%d, opid=%d,configNum=%d",gid,args.Key,args.Value,args.ShardId,args.OpId,ck.config.Num)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.WrongLeader == false && reply.Err == OK {
+					ck.PrintLog("recieve success PutAppend request from gid %d, key=%s, value=%s, shardId=%d",gid,args.Key,args.Value,args.ShardId)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					ck.PrintLog("receive PutAppend  request from gid %d, key=%s, value=%s, shardId=%d, WrongGroup",gid,args.Key,args.Value,args.ShardId)
 					break
 				}
 			}

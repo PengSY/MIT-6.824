@@ -36,6 +36,8 @@ type PutAppendArgs struct {
 	// otherwise RPC will break.
 	OpId int
 	CkId int64
+	ShardId int
+	ConfigNum int
 }
 
 type PutAppendReply struct {
@@ -46,8 +48,8 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
-	OpId int
-	CkId int64
+	ShardId int
+	ConfigNum int
 }
 
 type GetReply struct {

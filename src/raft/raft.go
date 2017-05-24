@@ -149,6 +149,7 @@ type Raft struct {
 	isDead bool
 	commitCh chan int
 	snapshotCh chan int
+	//Gid int
 }
 
 // return currentTerm and whether this server
@@ -230,11 +231,8 @@ func (rf *Raft) InstallSnapshotRPC(args *InstallSnapshotArgs,reply *InstallSnaps
 			go rf.ElectionRoutine()
 		}
 	}
-	if rf.leaderId!=args.LeaderId{
-		rf.leaderId=args.LeaderId
-	}
 
-	rf.PrintLog(fmt.Sprintf("recive snapshot from s%d",args.LeaderId))
+	rf.PrintLog(fmt.Sprintf("recive snapshot from s%d,lastIndex=%d",args.LeaderId,args.LastIncludedIndex))
 
 	ResetTimer(rf.electionTimer)
 	if args.LeaderId!=rf.leaderId{
@@ -882,15 +880,16 @@ func (rf *Raft) ApplyRoutine(){
 	}
 }
 
-func (rf *Raft) GarbageCollect(endIndex int){
+func (rf *Raft) GarbageCollect(endIndex int)bool{
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if rf.Log.GetHeadLogEntryIndex()>=endIndex{
-		return
+		return false
 	}
 	rf.Log.SetLog(rf.Log.GetLogEntriesAfter(endIndex))
 	rf.persist()
+	return true
 }
 
 //
@@ -927,6 +926,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitCh=make(chan int,100)
 	rf.snapshotCh=make(chan int,10)
 	rf.Log.Make()
+	//rf.Gid=gid
 
 	rf.readPersist(persister.ReadRaftState())
 	rf.commitIndex=rf.Log.GetHeadLogEntryIndex()

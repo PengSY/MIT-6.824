@@ -72,7 +72,7 @@ func (sm *ShardMaster) PrintLog(format string, a ...interface{}){
 	if ShardMasterDebug==0 || sm.isDead{
 		return
 	}
-	fmt.Println(fmt.Sprintf("s%d:",sm.me)+fmt.Sprintf(format,a...))
+	fmt.Println(fmt.Sprintf("master s%d:",sm.me)+fmt.Sprintf(format,a...))
 }
 
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
@@ -158,10 +158,12 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	op.replyCh=replyCh
 	op.LeaderId=sm.me
 
+	sm.PrintLog("receive Query Request")
 	if _,_,isLeader:=sm.rf.Start(op);!isLeader{
 		reply.WrongLeader=true
 		return
 	}
+	sm.PrintLog("Query Request waiting aggreement")
 	timer:=time.NewTimer(ResendTimeout*1000*time.Millisecond)
 	select {
 	case <-timer.C:
