@@ -14,7 +14,7 @@ import (
 	"log"
 )
 
-const ShardKVDebug=1
+const ShardKVDebug=0
 const QueryConfigInterval=0.1
 const GarbageCollectorInterval=0.1
 const MigrationTimeout=0.5

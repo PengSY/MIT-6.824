@@ -421,11 +421,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.commitIndex<newCommitIndex{
 		rf.commitIndex=newCommitIndex
 		rf.PrintLog(fmt.Sprintf("update commit to %d",rf.commitIndex))
-		rf.commitCh<-rf.commitIndex
-
+		rf.mu.Unlock()
+		rf.commitCh<-newCommitIndex
+	}else{
+		rf.mu.Unlock()
 	}
 
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 }
 
 //
@@ -730,8 +732,8 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 		rf.VotedFor = -1
 		go rf.ElectionRoutine()
 		rf.persist()
-		rf.mu.Unlock()
-		return false
+		//rf.mu.Unlock()
+		//return false
 	} else if !reply.Success {
 		rf.nextIndex[peerIdx]=reply.FirstConflictIndex
 		rf.PrintLog(fmt.Sprintf("(leader) receive append reply from s%d, decrease nextIndex to %d",
@@ -756,7 +758,10 @@ func (rf *Raft) HandleAppendEntriesReply(peerIdx int,reply AppendEntriesReply,ne
 			}
 
 			if rf.lastApplied<rf.commitIndex{
-				rf.commitCh<-rf.commitIndex
+				newCommitIndex:=rf.commitIndex
+				rf.mu.Unlock()
+				rf.commitCh<-newCommitIndex
+				return false
 			}
 		}
 	}
@@ -856,8 +861,11 @@ func (rf *Raft) ApplyRoutine(){
 				continue
 			}
 			rf.PrintLog(fmt.Sprintf("headIndex=%d,lastApplied=%d,commitIndex=%d",rf.Log.GetHeadLogEntryIndex(),rf.lastApplied,commitIndex))
-			entries:=rf.Log.GetLogEntries(rf.lastApplied+1,commitIndex+1)
+			//entries:=rf.Log.GetLogEntries(rf.lastApplied+1,commitIndex+1)
+			entries:=make([]LogEntry,commitIndex-rf.lastApplied)
+			copy(entries,rf.Log.GetLogEntries(rf.lastApplied+1,commitIndex+1))
 			rf.lastApplied = commitIndex
+			rf.mu.Unlock()
 			for _, entry := range entries {
 				var msg ApplyMsg
 				msg.Command = entry.Command
@@ -866,7 +874,7 @@ func (rf *Raft) ApplyRoutine(){
 				rf.applyCh <- msg
 				rf.PrintLog(fmt.Sprintf("apply index %d", msg.Index))
 			}
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 		case <-rf.snapshotCh:
 			var msg ApplyMsg
 			msg.UseSnapshot=true
@@ -875,8 +883,8 @@ func (rf *Raft) ApplyRoutine(){
 				rf.mu.Unlock()
 				return
 			}
-			rf.applyCh<-msg
 			rf.mu.Unlock()
+			rf.applyCh<-msg
 			//rf.PrintLog("send snap shot msg to kvserver")
 		}
 	}

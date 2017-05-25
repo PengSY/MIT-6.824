@@ -53,7 +53,14 @@ func (pl PairList) Len() int{
 }
 
 func (pl PairList) Less(i,j int) bool{
-	return pl[i].Value<pl[j].Value
+	//return pl[i].Value<pl[j].Value
+	if pl[i].Value<pl[j].Value{
+		return true
+	}else if pl[i].Value>pl[j].Value{
+		return false
+	}else{
+		return pl[i].Key<pl[j].Key
+	}
 }
 
 func (pl PairList) Swap(i,j int){
@@ -218,8 +225,19 @@ func (sm *ShardMaster) Rebalance(decreaseMap map[int]int,increaseMap map[int]int
 		}
 	}
 
-	shardId:=0
+	var increasePairs PairList
+	increasePairs=make(PairList,len(increaseMap))
+	i:=0
 	for gid,diff:=range increaseMap{
+		increasePairs[i]=Pair{gid,diff}
+		i++
+	}
+	sort.Sort(increasePairs)
+
+	shardId:=0
+	for _,pair:=range increasePairs{
+		gid:=pair.Key
+		diff:=pair.Value
 		for ;diff>0;diff--{
 			for ;newShards[shardId]!=0;shardId++{}
 			newShards[shardId]=gid
@@ -280,7 +298,18 @@ func (sm *ShardMaster) RunJoin(op Op){
 			decreaseMap[pair.Key]=pair.Value-base
 		}
 	}
+
+
+	gidList:=make([]int,len(args.Servers))
+	i:=0
 	for gid:=range args.Servers{
+		gidList[i]=gid
+		i++
+	}
+	sort.Sort(sort.IntSlice(gidList))
+
+
+	for _,gid:=range gidList{
 		if mod>0{
 			increaseMap[gid]=base+1
 			mod--
