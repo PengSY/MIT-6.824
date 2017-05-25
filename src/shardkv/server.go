@@ -14,7 +14,7 @@ import (
 	"log"
 )
 
-const ShardKVDebug=0
+const ShardKVDebug=1
 const QueryConfigInterval=0.1
 const GarbageCollectorInterval=0.1
 const MigrationTimeout=0.5
@@ -88,6 +88,7 @@ type ShardKV struct {
 	Shards map[int]Shard
 	ConfigComplete bool
 	Garbages map[int]Garbage
+	LastAppliedIndex int
 }
 
 
@@ -96,7 +97,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	var op Op
 	var replyCh chan GetReply
 
-	replyCh=make(chan GetReply)
+	replyCh=make(chan GetReply,1)
 	op.Args=*args
 	op.MyType=GetOp
 	op.LeaderId=kv.me
@@ -123,7 +124,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	var op Op
 	var replyCh chan PutAppendReply
 
-	replyCh=make(chan PutAppendReply)
+	replyCh=make(chan PutAppendReply,1)
 	op.Args=*args
 	op.MyType=OpType(args.Op)
 	op.LeaderId=kv.me
@@ -154,12 +155,13 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 	kv.PrintLog("I am going to dead")
-	//kv.mu.Lock()
+	kv.mu.Lock()
 	kv.PrintLog("kill call raft kill")
 	kv.rf.Kill()
+	kv.PrintLog("raft kill return")
 	kv.PrintLog("I am dead")
 	kv.isDead=true
-	//kv.mu.Unlock()
+	kv.mu.Unlock()
 }
 
 func (kv *ShardKV) ConfigMonitor(){
@@ -212,7 +214,7 @@ func (kv *ShardKV) ShardMigrationRPC(args *ShardMigrationArgs,reply *ShardMigrat
 	var op Op
 	var replyCh chan ShardMigrationReply
 
-	replyCh=make(chan ShardMigrationReply)
+	replyCh=make(chan ShardMigrationReply,1)
 	op.Args=*args
 	op.LeaderId=kv.me
 	op.MyType=MigrationOp
@@ -328,8 +330,8 @@ func (kv *ShardKV) SendShardMigrationRPC(servers []string,args *ShardMigrationAr
 func (kv *ShardKV) GarbageCollector(){
 	var replyCh chan int
 	for{
+		kv.PrintLog("garbage collector call raft getstate")
 		if _,isLeader:=kv.rf.GetState();!isLeader{
-			//kv.PrintLog("garbage collector release kv lock")
 			time.Sleep(GarbageCollectorInterval*1000*time.Millisecond)
 			continue
 		}
@@ -337,13 +339,11 @@ func (kv *ShardKV) GarbageCollector(){
 		replyCh=make(chan int,100)
 		timer:=time.NewTimer(GarbageCollectorInterval*1000*time.Millisecond)
 		kv.mu.Lock()
-		//kv.PrintLog("garbage collector get kv lock")
+		kv.PrintLog("garbage collector get kv lock")
 		if kv.isDead{
 			kv.mu.Unlock()
-			//kv.PrintLog("garbage collector release kv lock")
 			return
 		}
-		//kv.PrintLog("garbage collector call raft getstate")
 
 		for _,garbage:=range kv.Garbages{
 			var args ShardMigrationArgs
@@ -359,6 +359,7 @@ func (kv *ShardKV) GarbageCollector(){
 			}(replyCh, &args, garbage.Servers)
 
 		}
+		kv.PrintLog("garbage collector release kv lock")
 		kv.mu.Unlock()
 		//kv.PrintLog("garbage collector release kv lock")
 
@@ -596,15 +597,14 @@ func (kv *ShardKV) ApplyRoutine(){
 					log.Fatal("encode:", err)
 				}
 				snapshot := writer.Bytes()
-				if kv.rf.GarbageCollect(applyMsg.Index){
-					kv.PrintLog("make snapshot...")
-					kv.PrintLog("LatestCommitId:%v", kv.LatestCommitId)
-					kv.PrintLog("Shards:%v", kv.Shards)
-					kv.PrintLog("Config:%v", kv.Config)
-					kv.PrintLog("Garbages:%v", kv.Garbages)
-					kv.PrintLog("ConfigComplete:%v", kv.ConfigComplete)
-					kv.persister.SaveSnapshot(snapshot)
-				}
+				kv.PrintLog("make snapshot...")
+				kv.PrintLog("LatestCommitId:%v", kv.LatestCommitId)
+				kv.PrintLog("Shards:%v", kv.Shards)
+				kv.PrintLog("Config:%v", kv.Config)
+				kv.PrintLog("Garbages:%v", kv.Garbages)
+				kv.PrintLog("ConfigComplete:%v", kv.ConfigComplete)
+				kv.persister.SaveSnapshot(snapshot)
+				kv.rf.GarbageCollect(applyMsg.Index)
 				//kv.PrintLog("finish snapshot,size=%d",kv.persister.RaftStateSize())
 				kv.mu.Unlock()
 			}
@@ -671,6 +671,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.persister=persister
 	kv.ConfigComplete=true
 	kv.Garbages=make(map[int]Garbage)
+	kv.LastAppliedIndex=0
 
 	reader:=bytes.NewBuffer(kv.persister.ReadSnapshot())
 	decoder:=gob.NewDecoder(reader)

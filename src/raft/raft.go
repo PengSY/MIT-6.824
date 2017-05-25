@@ -537,7 +537,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
 	//rf.PrintLog("raft:I am dead")
+	rf.mu.Lock()
 	rf.isDead=true
+	rf.mu.Unlock()
 }
 
 func (rf *Raft) BroadcastRequestVoteRPC()(chan int,[]RequestVoteReply,bool){
@@ -880,16 +882,15 @@ func (rf *Raft) ApplyRoutine(){
 	}
 }
 
-func (rf *Raft) GarbageCollect(endIndex int)bool{
+func (rf *Raft) GarbageCollect(endIndex int){
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if rf.Log.GetHeadLogEntryIndex()>=endIndex{
-		return false
+		return
 	}
 	rf.Log.SetLog(rf.Log.GetLogEntriesAfter(endIndex))
 	rf.persist()
-	return true
 }
 
 //
