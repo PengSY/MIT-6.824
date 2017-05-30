@@ -36,7 +36,7 @@ type ReConfigureArgs struct {
 }
 
 type DeleteGarbageShardArgs struct {
-	ShardId int
+	Garbagekey GarbageKey
 }
 
 type ShardMigrationArgs struct {
@@ -56,6 +56,11 @@ type Garbage struct {
 	Shard Shard
 	ConfigNum int
 	LatestCommitId map[int64]int
+}
+
+type GarbageKey struct{
+	ShardId int
+	ConfigNum int
 }
 
 type Op struct {
@@ -87,8 +92,9 @@ type ShardKV struct {
 	Config shardmaster.Config
 	Shards map[int]Shard
 	ConfigComplete bool
-	Garbages map[int]Garbage
+	Garbages map[GarbageKey]Garbage
 	LastAppliedIndex int
+	LastGarbageId int
 }
 
 
@@ -328,7 +334,7 @@ func (kv *ShardKV) SendShardMigrationRPC(servers []string,args *ShardMigrationAr
 }
 
 func (kv *ShardKV) GarbageCollector(){
-	var replyCh chan int
+	var replyCh chan GarbageKey
 	for{
 		kv.PrintLog("garbage collector call raft getstate")
 		if _,isLeader:=kv.rf.GetState();!isLeader{
@@ -336,7 +342,7 @@ func (kv *ShardKV) GarbageCollector(){
 			continue
 		}
 
-		replyCh=make(chan int,100)
+		replyCh=make(chan GarbageKey,100)
 		timer:=time.NewTimer(GarbageCollectorInterval*1000*time.Millisecond)
 		kv.mu.Lock()
 		kv.PrintLog("garbage collector get kv lock")
@@ -345,18 +351,18 @@ func (kv *ShardKV) GarbageCollector(){
 			return
 		}
 
-		for _,garbage:=range kv.Garbages{
+		for garbagekey,garbage:=range kv.Garbages{
 			var args ShardMigrationArgs
 
 			args.LatestCommitId = garbage.LatestCommitId
 			args.ConfigNum = garbage.ConfigNum
 			args.MyShard = garbage.Shard
-			go func(replyCh chan int, args *ShardMigrationArgs, servers []string) {
+			go func(replyCh chan GarbageKey, args *ShardMigrationArgs, servers []string,garbagekey GarbageKey) {
 				if kv.SendShardMigrationRPC(servers, args) {
-					kv.PrintLog("move shard %d success", args.MyShard.Id)
-					replyCh <- args.MyShard.Id
+					kv.PrintLog("move shard %d success, config %d", garbagekey.ShardId,garbagekey.ConfigNum)
+					replyCh <- garbagekey
 				}
-			}(replyCh, &args, garbage.Servers)
+			}(replyCh, &args, garbage.Servers,garbagekey)
 
 		}
 		kv.PrintLog("garbage collector release kv lock")
@@ -368,11 +374,11 @@ func (kv *ShardKV) GarbageCollector(){
 			select {
 			case <-timer.C:
 				break Loop
-			case shardId := <-replyCh:
+			case garbagekey := <-replyCh:
 				var op Op
 
 				op.MyType = DeleteGarbageShardOp
-				op.Args = DeleteGarbageShardArgs{shardId}
+				op.Args = DeleteGarbageShardArgs{garbagekey}
 				//kv.PrintLog("garbage collector call raft start")
 				if _, _, isLeader := kv.rf.Start(op); !isLeader {
 					break Loop
@@ -389,8 +395,8 @@ func (kv *ShardKV) RunDeleteGarbageShard(op Op){
 
 	//kv.PrintLog("in run delete garbage shard")
 	args:=op.Args.(DeleteGarbageShardArgs)
-	delete(kv.Garbages,args.ShardId)
-	kv.PrintLog("delete shard %d from garbage",args.ShardId)
+	delete(kv.Garbages,args.Garbagekey)
+	kv.PrintLog("delete garbage shardId=%d from garbage",args.Garbagekey.ShardId)
 }
 
 func (kv *ShardKV) RunReconfigure(op Op){
@@ -416,13 +422,17 @@ func (kv *ShardKV) RunReconfigure(op Op){
 	for shardId,shard:=range kv.Shards{
 		if kv.Config.Shards[shardId]!=kv.gid{
 			var garbage Garbage
+			var garbageKey GarbageKey
 
+			//kv.LastGarbageId++
+			//garbage.GarbageId=kv.LastGarbageId
+			garbageKey.ConfigNum=newConfig.Num
+			garbageKey.ShardId=shard.Id
 			garbage.ConfigNum=newConfig.Num
 			garbage.Servers=kv.Config.Groups[kv.Config.Shards[shardId]]
-			//garbage.Gid=kv.Config.Shards[shardId]
 			garbage.Shard=shard
 			garbage.LatestCommitId=latestCommitId
-			kv.Garbages[shardId]=garbage
+			kv.Garbages[garbageKey]=garbage
 			delete(kv.Shards,shardId)
 		}
 	}
@@ -554,7 +564,7 @@ func (kv *ShardKV) ApplyRoutine(){
 		if applyMsg.UseSnapshot{
 			kv.mu.Lock()
 			kv.Shards=make(map[int]Shard)
-			kv.Garbages=make(map[int]Garbage)
+			kv.Garbages=make(map[GarbageKey]Garbage)
 
 			reader := bytes.NewBuffer(kv.persister.ReadSnapshot())
 			decoder := gob.NewDecoder(reader)
@@ -670,8 +680,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.Shards=make(map[int]Shard)
 	kv.persister=persister
 	kv.ConfigComplete=true
-	kv.Garbages=make(map[int]Garbage)
+	kv.Garbages=make(map[GarbageKey]Garbage)
 	kv.LastAppliedIndex=0
+	kv.LastGarbageId=0
 
 	reader:=bytes.NewBuffer(kv.persister.ReadSnapshot())
 	decoder:=gob.NewDecoder(reader)

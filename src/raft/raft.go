@@ -489,6 +489,10 @@ func (rf *Raft) PrintLog(s string){
 
 func ResetTimer(timer *time.Timer){
 	//if timer had expired, clear channel
+	if timer==nil{
+		return
+	}
+
 	select{
 	case <-timer.C:
 	default:
@@ -703,6 +707,11 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 			}
 
 			routineTerm:=rf.CurrentTerm
+
+			index := rf.Log.GetLastLogEntryIndex() + 1
+			e := LogEntry{nil, rf.CurrentTerm, index}
+			rf.Log.AppendLogEntry(e)
+
 			rf.mu.Unlock()
 			go rf.ReplicateLogRoutine(routineTerm)
 			return true
@@ -868,6 +877,9 @@ func (rf *Raft) ApplyRoutine(){
 			rf.mu.Unlock()
 			for _, entry := range entries {
 				var msg ApplyMsg
+				if entry.Command==nil{
+					continue
+				}
 				msg.Command = entry.Command
 				msg.Index = entry.Index
 				msg.UseSnapshot=false
