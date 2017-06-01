@@ -149,6 +149,7 @@ type Raft struct {
 	isDead bool
 	commitCh chan int
 	snapshotCh chan int
+	IsQuckilyCommit bool
 	//Gid int
 }
 
@@ -708,9 +709,11 @@ func (rf *Raft) HandleVoteReply(reply RequestVoteReply,voteCount *int)(bool){
 
 			routineTerm:=rf.CurrentTerm
 
-			index := rf.Log.GetLastLogEntryIndex() + 1
-			e := LogEntry{nil, rf.CurrentTerm, index}
-			rf.Log.AppendLogEntry(e)
+			if rf.IsQuckilyCommit{
+				index := rf.Log.GetLastLogEntryIndex() + 1
+				e := LogEntry{nil, rf.CurrentTerm, index}
+				rf.Log.AppendLogEntry(e)
+			}
 
 			rf.mu.Unlock()
 			go rf.ReplicateLogRoutine(routineTerm)
@@ -902,6 +905,13 @@ func (rf *Raft) ApplyRoutine(){
 	}
 }
 
+func (rf *Raft) SetQuicklyCommit(){
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.IsQuckilyCommit=true
+}
+
 func (rf *Raft) GarbageCollect(endIndex int){
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -947,6 +957,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitCh=make(chan int,100)
 	rf.snapshotCh=make(chan int,10)
 	rf.Log.Make()
+	rf.IsQuckilyCommit=false
 	//rf.Gid=gid
 
 	rf.readPersist(persister.ReadRaftState())

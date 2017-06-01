@@ -674,6 +674,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.applyCh = make(chan raft.ApplyMsg,100)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf.SetQuicklyCommit()
 	kv.isDead=false
 	kv.LatestCommitId=make(map[int64]int)
 	kv.mck=shardmaster.MakeClerk(kv.masters)
